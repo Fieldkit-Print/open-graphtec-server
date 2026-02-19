@@ -102,7 +102,7 @@ dls_worker = DataLinkServerWorker(settings=settings, store=store)
 ingest_worker = HeadlessIngestWorker(settings=settings, store=store)
 
 app = FastAPI(
-    title="Graphtec Data Link Server (Raspberry Pi)",
+    title="Open Graphtec Server",
     version="0.1.0",
     description=(
         "Headless Graphtec Data Link service with network cut-file intake."

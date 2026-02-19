@@ -1,127 +1,95 @@
-# Graphtec Headless Data Link Server (Raspberry Pi + Balena)
+# Open Graphtec Server
 
-This project runs a Graphtec Data Link server with no UI.
+Open Graphtec Server is a headless, Docker-based service for Graphtec cut jobs.
 
-You drop a vector cut PDF into a network folder, and the service does the rest:
-- reads the file
-- converts vector cut lines into cutter commands
-- stores a job by barcode
-- serves that job when the cutter asks for it
+You send it vector cut PDFs over the network. It converts them into cutter commands, stores jobs by barcode, and serves the right job when the cutter requests it.
 
-This is designed for hands-off production.
+No web UI is required for normal production use.
 
-## What problem this solves
+## Why this exists
 
-In many print-and-cut lines, your prepress tool creates two files:
+Many workflows generate:
 - a print file for the printer
 - a cut file for the cutter
 
-This service is the missing bridge on the Pi. It receives the cut file, keeps jobs ready, and responds to the Graphtec Data Link flow.
+This service handles the cut side automatically so print and cut stay matched by barcode.
 
-## How the flow works
+## Works anywhere Docker runs
 
-1. PDF Toolbox sends the print file to the printer.
-2. PDF Toolbox sends the cut PDF (and optional JSON sidecar) to the Pi hot folder.
-3. This service ingests the file and stores a cutter job.
-4. The operator scans the printed barcode at the cutter.
-5. The cutter asks for matching jobs and receives the cut data.
+You can run this on:
+- Linux servers
+- ARM single-board computers
+- Windows
+- macOS
 
-## Repo layout
+There is no device-specific logic in the code.
 
-- `dls-pi/` app source code
-- `docker-compose.yml` Balena deployment compose (Pi production)
-- `docker-compose.local.yml` local Docker compose (easy testing)
-- `.env.example` editable settings template
+## How it works
 
-## Quick start (local, no Pi needed)
+1. Your prepress flow sends a cut PDF to the hot folder.
+2. The service reads it and converts vector paths to cut commands.
+3. The job is saved with barcode metadata.
+4. The cutter asks for jobs and receives the matching one.
 
-### Prerequisites
+## Quick start (Docker)
 
-- Docker Desktop (or Docker Engine)
-- Git
-
-### 1. Clone and enter the repo
+### 1. Clone
 
 ```bash
-git clone https://github.com/Fieldkit-Print/graphtec-sdk.git
-cd graphtec-sdk
+git clone https://github.com/Fieldkit-Print/open-graphtec-server.git
+cd open-graphtec-server
 ```
 
-### 2. Create local settings
+### 2. Create your settings file
 
 ```bash
 cp .env.example .env
 ```
 
-If you do not have a cutter connected yet, keep `DLS_ENABLED=false` in `.env`.
+If you are just testing without a real cutter, keep `DLS_ENABLED=false`.
 
-### 3. Start the service
+### 3. Start
 
 ```bash
-docker compose -f docker-compose.local.yml up --build -d
+docker compose up --build -d
 ```
 
-### 4. Verify health
+### 4. Check health
 
 ```bash
 curl http://localhost:8080/health
 ```
 
-You should see `"ok": true` and `"mode": "headless"`.
-
-### 5. Drop a cut file
+### 5. Drop a cut PDF
 
 Put files in:
-- `./data/inbox/cut` (created automatically)
+- Docker volume path: `/data/inbox/cut` inside container
 
-On success, files move to:
-- `./data/processed`
-
-On failure, files move to:
-- `./data/errors`
-
-## Deploy to Raspberry Pi with Balena
-
-### 1. Create a Balena app for your Pi fleet
-
-Use Balena Cloud to create an app for your Pi device type.
-
-### 2. Set key environment values in Balena
-
-Set these in Balena app/device variables:
-- `CUTTER_HOST` = cutter IP address on your LAN
-- `CUTTER_PORT` = usually `9100`
-- `DLS_ENABLED` = `true`
-- `INGEST_ENABLED` = `true`
-
-### 3. Deploy
-
-From repo root:
+If you prefer a host folder mount for testing, use:
 
 ```bash
-balena push <your-balena-app-name>
+docker compose -f docker-compose.local.yml up --build -d
 ```
 
-Balena uses `docker-compose.yml` in this repo.
+Then use:
+- `./data/inbox/cut`
 
-## Input file rules
+## Input files
 
-This service expects vector cut data on page 1 of the PDF.
+This service expects vector cut data on page 1.
 
-### Supported today
-
+Supported now:
 - stroked lines
 - stroked rectangles
-- stroked curves (flattened to short line segments)
+- stroked curves (flattened into small line segments)
 
-### Rejected today
+Rejected in strict mode:
+- raster/scanned images
+- fill-only shapes without stroke paths
 
-- raster/scanned cut files in strict mode
-- fill-only shapes with no stroke path
+## Optional sidecar JSON
 
-## Sidecar JSON (recommended)
-
-For each `job.pdf`, place an optional JSON file with one of these names:
+For each `job.pdf`, you can provide one sidecar file:
 - `job.job.json`
 - `job.meta.json`
 - `job.json`
@@ -143,11 +111,9 @@ Example:
 Notes:
 - `barcode_link_info` must be exactly 9 letters/numbers.
 - `command_type`: `0` = GP-GL, `1` = HP-GL.
-- If no sidecar is present, barcode is inferred from filename when possible.
+- If sidecar is missing, barcode is inferred from filename when possible.
 
-## Headless API endpoints
-
-No UI pages are enabled. These API routes are available for status and automation.
+## API endpoints (headless ops)
 
 - `GET /health`
 - `GET /dls/status`
@@ -159,39 +125,29 @@ No UI pages are enabled. These API routes are available for status and automatio
 - `POST /jobs/import-json`
 - `POST /jobs/import-pdf`
 
-## Example API import (optional)
+## Common settings
 
-```bash
-curl -X POST http://localhost:8080/jobs/import-pdf \
-  -F "file=@/absolute/path/to/cut.pdf" \
-  -F "name=sample-job" \
-  -F "barcode_link_info=G0100ABCD" \
-  -F "command_type=0"
-```
+Set these in `.env`:
+- `CUTTER_HOST`: IP or hostname of your Graphtec cutter
+- `CUTTER_PORT`: usually `9100`
+- `DLS_ENABLED`: `true` when a cutter is connected
+- `INGEST_ENABLED`: `true` to watch the hot folder
 
 ## Troubleshooting
 
-- `health` is up but no jobs load:
-  check folder path and make sure files are true vector PDFs.
-- jobs move to `errors`:
-  open the matching `.error.txt` file in the errors folder.
-- cutter does not receive jobs:
-  verify `CUTTER_HOST`, `CUTTER_PORT`, and network reachability from Pi to cutter.
-- wrong job list on cutter:
-  verify barcode content is exactly 9 alphanumeric characters.
+- Files go to `errors`:
+  check the `.error.txt` in the same folder for the reason.
+- No jobs appear for a scan:
+  make sure barcode is 9 alphanumeric characters.
+- Service is up but cutter not responding:
+  verify `CUTTER_HOST`/`CUTTER_PORT` and network reachability.
 
-## Security and operations notes
+## Security note
 
-- This service has no login/auth layer by default. Put it on a trusted network.
-- Keep regular backups of `/data/jobs.db` if job history matters.
-- Keep Pi and Balena host up to date with security patches.
+This service has no built-in authentication.
+Run it on a trusted internal network or behind your own access controls.
 
 ## SDK files
 
-This public repo ships only the app code and deployment files.
-Graphtec SDK documents and binaries are intentionally excluded.
-
-## Current status
-
-This repo is production-usable for vector-only cut workflows and is still growing.
-Planned improvements include smarter vector filtering and stronger file validation profiles for different cut pipelines.
+This public repo includes only this app and deployment files.
+Vendor SDK documents and binaries are intentionally excluded.
