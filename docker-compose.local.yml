@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  graphtec-dls:
+    build: ./dls-pi
+    restart: unless-stopped
+    ports:
+      - "${HOST_API_PORT:-8080}:8080"
+    environment:
+      APP_DATA_DIR: ${APP_DATA_DIR:-/data}
+      API_HOST: 0.0.0.0
+      API_PORT: 8080
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DLS_ENABLED: ${DLS_ENABLED:-false}
+      INGEST_ENABLED: ${INGEST_ENABLED:-true}
+      INGEST_INBOX_DIR: ${INGEST_INBOX_DIR:-/data/inbox/cut}
+      INGEST_PROCESSED_DIR: ${INGEST_PROCESSED_DIR:-/data/processed}
+      INGEST_ERROR_DIR: ${INGEST_ERROR_DIR:-/data/errors}
+      INGEST_POLL_INTERVAL_SECONDS: ${INGEST_POLL_INTERVAL_SECONDS:-2.0}
+      INGEST_FILE_MIN_AGE_SECONDS: ${INGEST_FILE_MIN_AGE_SECONDS:-2.0}
+      CUTTER_HOST: ${CUTTER_HOST:-127.0.0.1}
+      CUTTER_PORT: ${CUTTER_PORT:-9100}
+      DLS_POLL_INTERVAL_SECONDS: ${DLS_POLL_INTERVAL_SECONDS:-1.0}
+      DLS_TIMEOUT_SECONDS: ${DLS_TIMEOUT_SECONDS:-5.0}
+      SEND_RETRY_TOTAL_MS: ${SEND_RETRY_TOTAL_MS:-3000}
+      SEND_RETRY_INTERVAL_MS: ${SEND_RETRY_INTERVAL_MS:-50}
+    volumes:
+      - ${LOCAL_DATA_DIR:-./data}:/data

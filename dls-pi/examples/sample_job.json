@@ -1,0 +1,13 @@
+{
+  "name": "triangle_demo",
+  "barcode_link_info": "G0100ABCD",
+  "command_type": 0,
+  "regmark_fx": 0,
+  "regmark_fy": 0,
+  "regmark_rx": 0,
+  "regmark_ry": 0,
+  "command_sequence": "J1,M100,100,D600,100,M600,100,D350,500,M350,500,D100,100\u0003",
+  "command_sequence_encoding": "plain",
+  "append_etx": false
+}
+

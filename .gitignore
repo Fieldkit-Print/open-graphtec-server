@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.coverage
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE/editor
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Local runtime files
+.env
+data/
+
+# Vendor SDK files (do not publish)
+CE_FC-SERIES-SDK-CDM27M/
