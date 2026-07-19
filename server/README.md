@@ -1,4 +1,4 @@
-# dls-pi App
+# server App
 
 This folder contains the Python service for the headless Graphtec Data Link server.
 

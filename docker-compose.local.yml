@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   graphtec-dls:
-    build: ./dls-pi
+    build: ./server
     restart: unless-stopped
     ports:
       - "${HOST_API_PORT:-8080}:8080"

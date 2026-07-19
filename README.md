@@ -1,153 +1,151 @@
 # Open Graphtec Server
 
-Open Graphtec Server is a headless, Docker-based service for Graphtec cut jobs.
+**A headless, open-source Data Link Server for Graphtec cutting plotters.**
 
-You send it vector cut PDFs over the network. It converts them into cutter commands, stores jobs by barcode, and serves the right job when the cutter requests it.
+Send vector cut PDFs to a hot folder or the HTTP API. The server converts
+them to GP-GL, stores them by barcode, and serves the right job the moment
+your cutter scans that barcode — no Windows box, no Graphtec Studio, no
+operator at a PC.
 
-No web UI is required for normal production use.
+Validated end-to-end on an FC9000-140 over the network: barcode scan →
+job handoff → 4-point ARMS registration → cut.
 
-## Why this exists
+```
+┌──────────┐  cut PDF   ┌─────────────────────┐  ESC.d1–d6  ┌─────────────┐
+│ prepress │ ─────────► │ Open Graphtec Server │ ◄─────────► │ FC9000 /    │
+│ RIP / API│  hot folder│  convert · store ·   │  TCP 9100   │ CE7000 ...  │
+└──────────┘            │  serve by barcode    │             │ scans, cuts │
+                        └─────────────────────┘             └─────────────┘
+```
 
-Many workflows generate:
-- a print file for the printer
-- a cut file for the cutter
+## Why
 
-This service handles the cut side automatically so print and cut stay matched by barcode.
+Barcode-driven cutting ("Data Link") normally requires Graphtec's desktop
+software running somewhere. This server speaks the Data Link protocol
+directly, so the cut side of a print-and-cut workflow becomes an unattended
+service: print jobs and cut jobs stay matched by a 9-character barcode, and
+the cutter pulls its own work.
 
-## Works anywhere Docker runs
+- **Headless first** — runs anywhere Docker (or Python 3.11+) runs: a
+  server, a NAS, a single-board computer.
+- **Status UI included** — a zero-build shop-floor page at `/` shows the
+  cutter, Data Link state, recent activity, and loaded jobs.
+- **Tested against a fake cutter** — the test suite includes a TCP
+  implementation of the cutter side of the protocol, with fault injection.
 
-You can run this on:
-- Linux servers
-- ARM single-board computers
-- Windows
-- macOS
+## Supported hardware
 
-There is no device-specific logic in the code.
+Data Link–capable Graphtec models (FC9000, CE7000 and newer grit-rolling
+models) connected via LAN on TCP 9100. Development and validation were done
+on an FC9000-140 (firmware V1.39).
 
-## How it works
-
-1. Your prepress flow sends a cut PDF to the hot folder.
-2. The service reads it and converts vector paths to cut commands.
-3. The job is saved with barcode metadata.
-4. The cutter asks for jobs and receives the matching one.
-
-## Quick start (Docker)
-
-### 1. Clone
+## Quick start
 
 ```bash
 git clone https://github.com/Fieldkit-Print/open-graphtec-server.git
 cd open-graphtec-server
-```
-
-### 2. Create your settings file
-
-```bash
-cp .env.example .env
-```
-
-If you are just testing without a real cutter, keep `DLS_ENABLED=false`.
-
-### 3. Start
-
-```bash
+cp .env.example .env          # set CUTTER_HOST; keep DLS_ENABLED=false to try without a cutter
 docker compose up --build -d
+open http://localhost:8080/   # status UI
 ```
 
-### 4. Check health
+Drop a vector cut PDF (with optional sidecar JSON) into the hot folder —
+`/data/inbox/cut` inside the container — or POST it to the API. When the
+cutter scans the matching barcode, the job is delivered automatically.
+
+To run bare-metal instead of Docker:
 
 ```bash
-curl http://localhost:8080/health
+cd server
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+CUTTER_HOST=192.168.1.50 DLS_ENABLED=true uvicorn app.main:app --port 8080
 ```
-
-### 5. Drop a cut PDF
-
-Put files in:
-- Docker volume path: `/data/inbox/cut` inside container
-
-If you prefer a host folder mount for testing, use:
-
-```bash
-docker compose -f docker-compose.local.yml up --build -d
-```
-
-Then use:
-- `./data/inbox/cut`
 
 ## Input files
 
-This service expects vector cut data on page 1.
-
-Supported now:
-- stroked lines
-- stroked rectangles
-- stroked curves (flattened into small line segments)
-
-Rejected in strict mode:
-- raster/scanned images
-- fill-only shapes without stroke paths
-
-## Optional sidecar JSON
-
-For each `job.pdf`, you can provide one sidecar file:
-- `job.job.json`
-- `job.meta.json`
-- `job.json`
-
-Example:
+The hot folder expects vector cut data on page 1 of a PDF: stroked lines,
+rectangles, and curves (flattened to segments). Raster images and fill-only
+shapes are rejected in strict mode. An optional sidecar (`job.job.json`,
+`job.meta.json`, or `job.json`) carries metadata:
 
 ```json
 {
   "name": "front-label-001",
-  "barcode_link_info": "G0100ABCD",
+  "barcode_link_info": "A0100ABCD",
   "command_type": 0,
-  "regmark_fx": 0,
-  "regmark_fy": 0,
-  "regmark_rx": 0,
-  "regmark_ry": 0
+  "regmark_fx": 60,
+  "regmark_fy": 400
 }
 ```
 
-Notes:
-- `barcode_link_info` must be exactly 9 letters/numbers.
-- `command_type`: `0` = GP-GL, `1` = HP-GL.
-- If sidecar is missing, barcode is inferred from filename when possible.
+- `barcode_link_info`: exactly 9 characters `0-9 A-Z`; the first character
+  must not be `G` (reserved by Graphtec). Missing sidecar? A 9-character
+  token in the filename is used.
+- `regmark_fx/fy`: offset from the barcode Start Mark to the first
+  registration mark, in 0.1 mm units.
+- `command_type`: `0` = GP-GL (HP-GL input is not converted yet).
 
-## API endpoints (headless ops)
+## HTTP API
 
-- `GET /health`
-- `GET /dls/status`
-- `GET /ingest/status`
-- `POST /dls/start`
-- `POST /dls/stop`
-- `GET /jobs`
-- `GET /jobs/{job_id}`
-- `POST /jobs/import-json`
-- `POST /jobs/import-pdf`
+All endpoints except `/` and `/health` require an `X-API-Key` header when
+`API_KEY` is set (leave it empty on a trusted network).
 
-## Common settings
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/` | Status UI (HTML) |
+| GET | `/health` | Full service health snapshot |
+| GET | `/dls/status` | Data Link worker state + recent events |
+| POST | `/dls/start` · `/dls/stop` | Control the Data Link worker |
+| GET | `/ingest/status` | Hot-folder worker state |
+| POST | `/ingest/start` · `/ingest/stop` | Control the hot-folder worker |
+| GET | `/jobs` | List jobs (filter: `barcode_link_info`) |
+| GET | `/jobs/{id}` | Job details |
+| POST | `/jobs/import-pdf` | Upload a PDF for conversion |
+| POST | `/jobs/import-json` | Import a raw GP-GL job |
 
-Set these in `.env`:
-- `CUTTER_HOST`: IP or hostname of your Graphtec cutter
-- `CUTTER_PORT`: usually `9100`
-- `DLS_ENABLED`: `true` when a cutter is connected
-- `INGEST_ENABLED`: `true` to watch the hot folder
+## Configuration
 
-## Troubleshooting
+Set in `.env` (see `.env.example` for the full list):
 
-- Files go to `errors`:
-  check the `.error.txt` in the same folder for the reason.
-- No jobs appear for a scan:
-  make sure barcode is 9 alphanumeric characters.
-- Service is up but cutter not responding:
-  verify `CUTTER_HOST`/`CUTTER_PORT` and network reachability.
+| Variable | Meaning |
+|---|---|
+| `CUTTER_HOST` / `CUTTER_PORT` | Cutter address (port is normally 9100) |
+| `DLS_ENABLED` | Poll the cutter (enable when one is connected) |
+| `INGEST_ENABLED` | Watch the hot folder |
+| `API_KEY` | Require `X-API-Key` on the API (empty = open) |
+| `GPGL_STEPS_PER_MM` | Cutter's GP-GL step size (10 = 0.1 mm default) |
+| `MAX_UPLOAD_BYTES` | Upload / conversion size cap |
 
-## Security note
+On startup the server reads the cutter's model and step size and warns
+loudly if the configured scale does not match the machine.
 
-This service has no built-in authentication.
-Run it on a trusted internal network or behind your own access controls.
+## Test sheets
 
-## SDK files
+`test-sheet/` contains generators for printable barcode + registration-mark
+test sheets and their matching jobs — the same sheets used to validate this
+project on hardware. Print at 100% scale, import the job, scan, and the
+cutter should trace the printed shapes.
 
-This public repo includes only this app and deployment files.
-Vendor SDK documents and binaries are intentionally excluded.
+## Development
+
+```bash
+cd server
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+The suite (55 tests) includes `tests/fake_cutter.py`, a scriptable TCP
+implementation of the cutter side of the ESC.d1–d6 protocol with fault
+injection, plus golden-file converter tests built on in-memory PDFs.
+
+## Security
+
+No authentication is enabled by default; the service is designed for
+trusted internal networks. Set `API_KEY` for anything beyond that, and put
+a reverse proxy in front if you need TLS.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Not affiliated with or endorsed by Graphtec
+Corporation. Graphtec SDK documents are not included in this repository.
