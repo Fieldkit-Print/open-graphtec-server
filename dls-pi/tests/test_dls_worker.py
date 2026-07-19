@@ -80,7 +80,15 @@ def test_full_barcode_cut_cycle(tmp_path, store) -> None:
             assert wait_until(
                 lambda: worker.get_status()["current_status"] == 0
             )
-            assert worker.get_status()["last_error"] is None
+            status = worker.get_status()
+            assert status["last_error"] is None
+
+            # The synthesized event log captured the whole cycle.
+            kinds = [e["kind"] for e in status["recent_events"]]
+            messages = " | ".join(e["message"] for e in status["recent_events"])
+            assert "cutter" in kinds and "barcode" in kinds and "job" in kinds
+            assert "JOB1" in messages
+            assert status["current_status_label"] == "Stopped"
         finally:
             worker.stop()
 

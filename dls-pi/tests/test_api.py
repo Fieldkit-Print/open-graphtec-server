@@ -55,6 +55,15 @@ def test_health_is_open(client) -> None:
     assert response.json()["ok"] is True
 
 
+def test_status_page_served_at_root(client) -> None:
+    response = client.get("/")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Open" in response.text and "Graphtec" in response.text
+    # The page must work without auth: it reads /health only.
+    assert "/health" in response.text
+
+
 def test_api_key_enforced_when_configured(client, main) -> None:
     main.settings = dataclasses.replace(main.settings, api_key="secret")
     assert client.get("/jobs").status_code == 401

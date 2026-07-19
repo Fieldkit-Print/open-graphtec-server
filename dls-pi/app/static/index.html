@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open Graphtec Server</title>
+<style>
+  :root {
+    color-scheme: light;
+    --plane: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --hairline: #e1e0d9;
+    --border: rgba(11, 11, 11, 0.10);
+    --good: #0ca30c;
+    --good-text: #006300;
+    --warning: #fab219;
+    --serious: #ec835a;
+    --critical: #d03b3b;
+    --accent: #2a78d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --plane: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --hairline: #2c2c2a;
+      --border: rgba(255, 255, 255, 0.10);
+      --good-text: #0ca30c;
+      --accent: #3987e5;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--plane);
+    color: var(--ink);
+    padding: 24px;
+    max-width: 1080px;
+    margin: 0 auto;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 12px;
+    margin-bottom: 20px; flex-wrap: wrap;
+  }
+  .wordmark { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+  .wordmark span { color: var(--accent); }
+  .conn { margin-left: auto; font-size: 13px; color: var(--ink-2);
+          display: flex; align-items: center; gap: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .tiles {
+    display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    margin-bottom: 16px;
+  }
+  .tile {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .tile .label {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 6px;
+  }
+  .tile .value { font-size: 22px; font-weight: 650; line-height: 1.2; }
+  .tile .sub { font-size: 12.5px; color: var(--ink-2); margin-top: 4px; }
+  .status-line { display: flex; align-items: center; gap: 8px; }
+  .badge { font-size: 12px; color: var(--ink-2); }
+  section {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px; margin-bottom: 16px;
+  }
+  h2 {
+    font-size: 12px; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 10px;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th {
+    text-align: left; font-weight: 600; color: var(--muted);
+    font-size: 11.5px; letter-spacing: 0.04em; text-transform: uppercase;
+    padding: 6px 10px 6px 0; border-bottom: 1px solid var(--hairline);
+  }
+  td {
+    padding: 7px 10px 7px 0; border-bottom: 1px solid var(--hairline);
+    color: var(--ink);
+  }
+  td.num { font-variant-numeric: tabular-nums; }
+  td.mono, .evt-time { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  .events { list-style: none; font-size: 13.5px; }
+  .events li {
+    display: flex; gap: 10px; padding: 6px 0;
+    border-bottom: 1px solid var(--hairline); align-items: baseline;
+  }
+  .events li:last-child, tr:last-child td { border-bottom: none; }
+  .evt-time { flex: 0 0 62px; font-size: 12.5px; }
+  .evt-kind {
+    flex: 0 0 72px; font-size: 11px; font-weight: 600;
+    letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted);
+  }
+  .empty { color: var(--muted); font-size: 13px; padding: 6px 0; }
+  .error-banner {
+    background: var(--surface); border: 1px solid var(--critical);
+    border-radius: 10px; padding: 10px 14px; margin-bottom: 16px;
+    font-size: 13.5px; display: none;
+  }
+  .keyrow { display: none; gap: 8px; margin-top: 8px; }
+  .keyrow input {
+    flex: 1; padding: 6px 10px; font-size: 13px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--plane); color: var(--ink);
+  }
+  .keyrow button {
+    padding: 6px 14px; font-size: 13px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface); color: var(--ink);
+  }
+  footer { font-size: 12px; color: var(--muted); text-align: center; padding: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="wordmark">Open <span>Graphtec</span> Server</div>
+  <div class="conn"><span class="dot" id="conn-dot" style="background:var(--muted)"></span><span id="conn-text">connecting…</span></div>
+</header>
+
+<div class="error-banner" id="error-banner"></div>
+
+<div class="tiles">
+  <div class="tile">
+    <div class="label">Cutter</div>
+    <div class="value" id="cutter-model">—</div>
+    <div class="sub" id="cutter-sub">—</div>
+  </div>
+  <div class="tile">
+    <div class="label">Data Link</div>
+    <div class="value status-line"><span class="dot" id="dls-dot" style="background:var(--muted)"></span><span id="dls-state">—</span></div>
+    <div class="sub" id="dls-sub">—</div>
+  </div>
+  <div class="tile">
+    <div class="label">Hot Folder</div>
+    <div class="value status-line"><span class="dot" id="ingest-dot" style="background:var(--muted)"></span><span id="ingest-state">—</span></div>
+    <div class="sub" id="ingest-sub">—</div>
+  </div>
+</div>
+
+<section>
+  <h2>Recent activity</h2>
+  <ul class="events" id="events"><li class="empty">No events yet.</li></ul>
+</section>
+
+<section>
+  <h2>Cut jobs</h2>
+  <div id="jobs-wrap"><div class="empty">Loading…</div></div>
+  <div class="keyrow" id="keyrow">
+    <input id="key-input" type="password" placeholder="API key required to list jobs">
+    <button id="key-save">Save</button>
+  </div>
+</section>
+
+<footer>Open Graphtec Server · <span id="foot-note">—</span></footer>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+
+// Status color + label pairs (color never carries meaning alone).
+const DLS_COLORS = {
+  "-999": "var(--critical)", "0": "var(--muted)", "1": "var(--accent)",
+  "2": "var(--accent)", "3": "var(--accent)", "4": "var(--accent)",
+  "5": "var(--good)", "6": "var(--warning)", "7": "var(--critical)",
+};
+
+function fmtTime(iso) {
+  try {
+    return new Date(iso).toLocaleTimeString([], {hour12: false});
+  } catch { return iso; }
+}
+
+async function pollHealth() {
+  let data;
+  try {
+    const res = await fetch("/health", {cache: "no-store"});
+    data = await res.json();
+  } catch {
+    $("conn-dot").style.background = "var(--critical)";
+    $("conn-text").textContent = "server unreachable";
+    $("error-banner").style.display = "block";
+    $("error-banner").textContent =
+      "✕ Cannot reach the Open Graphtec Server — is it running?";
+    return;
+  }
+  $("error-banner").style.display = "none";
+  $("conn-dot").style.background = "var(--good)";
+  $("conn-text").textContent = "server online";
+
+  const dls = data.dls || {};
+  $("cutter-model").textContent = dls.cutter_model || "Not identified";
+  $("cutter-sub").textContent =
+    `${dls.cutter_host}:${dls.cutter_port}` +
+    (dls.cutter_step_size_mm ? ` · step ${dls.cutter_step_size_mm} mm` : "");
+
+  const code = String(dls.current_status);
+  $("dls-dot").style.background = dls.is_running
+    ? (DLS_COLORS[code] || "var(--muted)") : "var(--muted)";
+  $("dls-state").textContent = dls.is_running
+    ? (dls.current_status_label || code) : "Worker stopped";
+  $("dls-sub").textContent = dls.last_error
+    ? `⚠ ${dls.last_error}`
+    : (dls.standby_mode ? "Standby — waiting for a scan cycle"
+                        : "Active in scan cycle");
+
+  const ing = data.ingest || {};
+  $("ingest-dot").style.background = ing.is_running
+    ? "var(--good)" : "var(--muted)";
+  $("ingest-state").textContent = ing.is_running ? "Watching" : "Stopped";
+  $("ingest-sub").textContent =
+    `${ing.processed_count ?? 0} processed · ${ing.error_count ?? 0} errors` +
+    (ing.last_processed_file ? ` · last: ${ing.last_processed_file}` : "");
+
+  const events = (dls.recent_events || []).slice().reverse();
+  const list = $("events");
+  list.innerHTML = "";
+  if (!events.length) {
+    list.innerHTML = '<li class="empty">No events yet.</li>';
+  }
+  for (const evt of events.slice(0, 12)) {
+    const li = document.createElement("li");
+    const t = document.createElement("span");
+    t.className = "evt-time"; t.textContent = fmtTime(evt.time);
+    const k = document.createElement("span");
+    k.className = "evt-kind"; k.textContent = evt.kind;
+    const m = document.createElement("span");
+    m.textContent = evt.message;
+    li.append(t, k, m);
+    list.appendChild(li);
+  }
+}
+
+async function pollJobs() {
+  const headers = {};
+  const key = localStorage.getItem("ogs_api_key");
+  if (key) headers["X-API-Key"] = key;
+  let res;
+  try {
+    res = await fetch("/jobs?limit=15", {headers, cache: "no-store"});
+  } catch { return; }
+  if (res.status === 401) {
+    $("jobs-wrap").innerHTML =
+      '<div class="empty">An API key is configured on this server.</div>';
+    $("keyrow").style.display = "flex";
+    return;
+  }
+  $("keyrow").style.display = "none";
+  const jobs = await res.json();
+  if (!jobs.length) {
+    $("jobs-wrap").innerHTML = '<div class="empty">No jobs loaded.</div>';
+    return;
+  }
+  const rows = jobs.map((j) => `<tr>
+    <td class="num">${j.id}</td>
+    <td>${j.name.replace(/[<>&]/g, "")}</td>
+    <td class="mono">${j.barcode_link_info}</td>
+    <td>${j.command_type === 0 ? "GP-GL" : "HP-GL"}</td>
+    <td class="num">${(j.command_length / 1024).toFixed(1)} KB</td>
+    <td class="mono">${new Date(j.created_at).toLocaleString([], {hour12: false})}</td>
+  </tr>`).join("");
+  $("jobs-wrap").innerHTML = `<table>
+    <thead><tr><th>ID</th><th>Name</th><th>Barcode</th><th>Type</th>
+    <th>Size</th><th>Created</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+$("key-save").addEventListener("click", () => {
+  localStorage.setItem("ogs_api_key", $("key-input").value.trim());
+  pollJobs();
+});
+
+$("foot-note").textContent = window.location.host;
+pollHealth(); pollJobs();
+setInterval(pollHealth, 2000);
+setInterval(pollJobs, 5000);
+</script>
+</body>
+</html>

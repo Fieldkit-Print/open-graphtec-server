@@ -16,6 +16,19 @@ MAX_JOB_NAME_LENGTH = 25
 # ESC.C31;16: reply codes -> step size in mm (CE8000/FC9000 spec 3.3.14).
 STEP_SIZE_CODE_TO_MM = {1: 0.100, 2: 0.050, 3: 0.025, 4: 0.010}
 
+# Human labels for the ESC.d1 Data Link status values (guideline Table 1).
+DLS_STATUS_LABELS = {
+    -999: "Not communicating",
+    0: "Stopped",
+    1: "Scanning barcode",
+    2: "Requesting job list",
+    3: "Selecting job",
+    4: "Job determined",
+    5: "Cutting",
+    6: "User operating",
+    7: "Error",
+}
+
 
 class SendError(RuntimeError):
     """Failed before the payload was (fully) delivered. Safe to retry."""

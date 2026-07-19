@@ -8,6 +8,8 @@ import logging
 import re
 from typing import Optional
 
+from pathlib import Path
+
 from fastapi import (
     Depends,
     FastAPI,
@@ -18,6 +20,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
+from fastapi.responses import FileResponse
 
 from .config import Settings
 from .converters.pdf_to_gpgl import convert_pdf_to_gpgl
@@ -169,6 +172,16 @@ app = FastAPI(
     openapi_url=None,
     lifespan=lifespan,
 )
+
+
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+@app.get("/", include_in_schema=False)
+def status_page() -> FileResponse:
+    """Shop-floor status page. Reads only /health (open); job listing in
+    the page prompts for the API key when one is configured."""
+    return FileResponse(_STATIC_DIR / "index.html", media_type="text/html")
 
 
 @app.get("/health")

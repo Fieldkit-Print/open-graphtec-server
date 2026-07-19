@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import deque
+from datetime import datetime, timezone
 import fcntl
 import logging
 from pathlib import Path
@@ -10,6 +12,7 @@ from typing import Optional
 from .config import Settings
 from .models import CutJobMeta
 from .protocol import (
+    DLS_STATUS_LABELS,
     STEP_SIZE_CODE_TO_MM,
     DataLinkClient,
     is_allowed_transition,
@@ -76,6 +79,9 @@ class DataLinkServerWorker:
         self._latest_job_metas: list[CutJobMeta] = []
         self._cutter_model: Optional[str] = None
         self._cutter_step_size_mm: Optional[float] = None
+        # The cutter never pushes events; this log is synthesized from the
+        # polling loop so the API/UI can show recent activity.
+        self._events: deque[dict[str, str]] = deque(maxlen=50)
 
     def start(self) -> bool:
         with self._lifecycle_lock:
@@ -130,7 +136,19 @@ class DataLinkServerWorker:
                 "cutter_port": self._settings.cutter_port,
                 "cutter_model": self._cutter_model,
                 "cutter_step_size_mm": self._cutter_step_size_mm,
+                "current_status_label": DLS_STATUS_LABELS.get(
+                    self._current_status, f"Unknown ({self._current_status})"
+                ),
+                "recent_events": list(self._events),
             }
+
+    def _record_event(self, kind: str, message: str) -> None:
+        with self._runtime_lock:
+            self._events.append({
+                "time": datetime.now(timezone.utc).isoformat(),
+                "kind": kind,
+                "message": message,
+            })
 
     def _run(self) -> None:
         if not self._process_lock.acquire():
@@ -199,6 +217,11 @@ class DataLinkServerWorker:
             model or "unknown",
             step_size_mm if step_size_mm is not None else "unknown",
         )
+        self._record_event(
+            "cutter",
+            f"Cutter identified: {model or 'unknown'} "
+            f"(step size {step_size_mm if step_size_mm is not None else '?'} mm).",
+        )
 
         if step_size_mm is None:
             self._set_error(
@@ -242,6 +265,10 @@ class DataLinkServerWorker:
 
     def _on_status_transition(self, *, prev_status: int, new_status: int) -> None:
         logger.info("DLS status changed: %s -> %s", prev_status, new_status)
+        self._record_event(
+            "status",
+            DLS_STATUS_LABELS.get(new_status, f"Status {new_status}"),
+        )
 
         if not is_allowed_transition(prev_status, new_status):
             self._enter_standby(
@@ -285,6 +312,11 @@ class DataLinkServerWorker:
             with self._runtime_lock:
                 self._latest_job_metas = metas
             names = [meta.name for meta in metas]
+            self._record_event(
+                "barcode",
+                f"Barcode {barcode_link_info}: offering "
+                f"{len(names)} job(s)" + (f" ({', '.join(names)})" if names else ""),
+            )
             response = self._client.send_job_list(names)
             if response < 0:
                 self._enter_standby(
@@ -338,6 +370,11 @@ class DataLinkServerWorker:
                 )
                 return
             self._client.send_command_sequence(selected_job.command_sequence)
+            self._record_event(
+                "job",
+                f"Sent job '{selected_job.name}' to cutter "
+                f"({len(selected_job.command_sequence)} bytes).",
+            )
         except Exception as exc:  # noqa: BLE001
             self._enter_standby(f"Failed while sending selected job: {exc}")
 
@@ -345,6 +382,7 @@ class DataLinkServerWorker:
         with self._runtime_lock:
             self._standby_mode = True
             self._last_error = message
+        self._record_event("standby", message)
         logger.warning(message)
 
     def _set_error(self, message: str) -> None:
