@@ -21,8 +21,25 @@ class CutJob:
     created_at: datetime
 
 
+@dataclass
+class CutJobMeta:
+    """A CutJob without its command BLOB, for job-list building."""
+
+    id: int
+    name: str
+    barcode_link_info: str
+    command_type: int
+    regmark_fx: int
+    regmark_fy: int
+    regmark_rx: int
+    regmark_ry: int
+    created_at: datetime
+
+
 class ImportJsonJobRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=64)
+    # Job names go on the cutter's LCD via ESC.d3: max 25 printable ASCII
+    # characters per the DLS guideline (p.19).
+    name: str = Field(min_length=1, max_length=25, pattern=r"^[\x20-\x7e]+$")
     barcode_link_info: str = Field(min_length=9, max_length=9)
     command_type: Literal[0, 1] = 0
     regmark_fx: int = 0

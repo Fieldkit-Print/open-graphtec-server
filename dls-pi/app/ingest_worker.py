@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from .config import Settings
 from .converters.pdf_to_gpgl import convert_pdf_to_gpgl
+from .protocol import sanitize_job_name
 from .storage import JobStore
 
 
@@ -20,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 
 BARCODE_PATTERN = re.compile(r"[A-Z0-9]{9}")
+# A 9-char run not embedded in a longer alphanumeric run, so a filename like
+# "ORDER12345678" cannot contribute a bogus barcode substring.
+BARCODE_TOKEN_PATTERN = re.compile(r"(?<![A-Z0-9])[A-Z0-9]{9}(?![A-Z0-9])")
 
 
 @dataclass
@@ -41,6 +45,7 @@ class HeadlessIngestWorker:
         self._store = store
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._lifecycle_lock = threading.Lock()
         self._state_lock = threading.Lock()
 
         self._is_running = False
@@ -51,9 +56,18 @@ class HeadlessIngestWorker:
         self._last_processed_time_utc: Optional[str] = None
 
     def start(self) -> bool:
-        with self._state_lock:
-            if self._thread and self._thread.is_alive():
-                return True
+        with self._lifecycle_lock:
+            thread = self._thread
+            if thread and thread.is_alive():
+                if not self._stop_event.is_set():
+                    return True
+                thread.join(timeout=10.0)
+                if thread.is_alive():
+                    logger.error(
+                        "Cannot restart ingest worker: previous thread has "
+                        "not terminated yet."
+                    )
+                    return False
 
             self._stop_event.clear()
             self._thread = threading.Thread(
@@ -64,11 +78,15 @@ class HeadlessIngestWorker:
             self._thread.start()
             return True
 
-    def stop(self) -> None:
-        self._stop_event.set()
-        thread = self._thread
-        if thread and thread.is_alive():
-            thread.join(timeout=5.0)
+    def stop(self) -> bool:
+        with self._lifecycle_lock:
+            self._stop_event.set()
+            thread = self._thread
+            if thread and thread.is_alive():
+                thread.join(timeout=10.0)
+                if thread.is_alive():
+                    return False
+            return True
 
     def get_status(self) -> dict[str, object]:
         with self._state_lock:
@@ -96,8 +114,17 @@ class HeadlessIngestWorker:
 
         try:
             while not self._stop_event.is_set():
-                self._poll_once()
-                time.sleep(self._settings.ingest_poll_interval_seconds)
+                try:
+                    self._poll_once()
+                except Exception as exc:  # noqa: BLE001
+                    # The hot folder must never silently die: a vanished
+                    # file or a permission blip is not fatal.
+                    logger.exception("Ingest poll failed: %s", exc)
+                    with self._state_lock:
+                        self._last_error = f"Ingest poll failed: {exc}"
+                self._stop_event.wait(
+                    self._settings.ingest_poll_interval_seconds
+                )
         finally:
             with self._state_lock:
                 self._is_running = False
@@ -105,28 +132,60 @@ class HeadlessIngestWorker:
 
     def _poll_once(self) -> None:
         inbox = self._settings.ingest_inbox_dir
-        pdf_files = sorted(
-            [p for p in inbox.glob("*.pdf") if p.is_file()],
-            key=lambda p: p.stat().st_mtime,
-        )
         now = time.time()
 
-        for pdf_path in pdf_files:
-            file_age = now - pdf_path.stat().st_mtime
-            if file_age < self._settings.ingest_file_min_age_seconds:
+        candidates: list[tuple[float, Path]] = []
+        for path in inbox.glob("*.pdf"):
+            try:
+                if not path.is_file():
+                    continue
+                candidates.append((path.stat().st_mtime, path))
+            except FileNotFoundError:
                 continue
-            self._process_single_file(pdf_path)
 
-    def _process_single_file(self, pdf_path: Path) -> None:
-        sidecar_path = self._find_sidecar_json(pdf_path)
+        for mtime, pdf_path in sorted(candidates):
+            if self._stop_event.is_set():
+                return
+            min_age = self._settings.ingest_file_min_age_seconds
+            if now - mtime < min_age:
+                continue
+
+            sidecar_path = self._find_sidecar_json(pdf_path)
+            if sidecar_path is not None:
+                # The pair is only stable once the sidecar has also settled;
+                # otherwise we can read a half-written JSON.
+                try:
+                    sidecar_age = now - sidecar_path.stat().st_mtime
+                except FileNotFoundError:
+                    sidecar_age = 0.0
+                if sidecar_age < min_age:
+                    continue
+            else:
+                # Give a late-arriving sidecar one extra poll interval
+                # before falling back to filename-derived metadata.
+                grace = min_age + self._settings.ingest_poll_interval_seconds
+                if now - mtime < grace:
+                    continue
+
+            self._process_single_file(pdf_path, sidecar_path)
+
+    def _process_single_file(
+        self, pdf_path: Path, sidecar_path: Optional[Path]
+    ) -> None:
         try:
             metadata = self._load_metadata(sidecar_path)
             barcode_link_info = self._resolve_barcode(pdf_path, metadata)
-            job_name = str(metadata.get("name") or pdf_path.stem).strip()
+            job_name = sanitize_job_name(
+                str(metadata.get("name") or pdf_path.stem),
+                fallback=pdf_path.stem[:25] or "job",
+            )
             command_type = int(metadata.get("command_type", 0))
-            if command_type not in (0, 1):
+            if command_type != 0:
+                # The converter only emits GP-GL. Declaring HP-GL via ESC.d6
+                # would make an AUTO-mode cutter mis-parse the job.
                 raise ValueError(
-                    "command_type must be 0 (GP-GL) or 1 (HP-GL)."
+                    "command_type must be 0 (GP-GL) for PDF ingest: the "
+                    "converter emits GP-GL only."
                 )
 
             regmark_fx = int(metadata.get("regmark_fx", 0))
@@ -134,8 +193,31 @@ class HeadlessIngestWorker:
             regmark_rx = int(metadata.get("regmark_rx", 0))
             regmark_ry = int(metadata.get("regmark_ry", 0))
 
+            pdf_size = pdf_path.stat().st_size
+            if pdf_size > self._settings.max_upload_bytes:
+                raise ValueError(
+                    f"PDF is {pdf_size} bytes; maximum allowed is "
+                    f"{self._settings.max_upload_bytes}."
+                )
             pdf_bytes = pdf_path.read_bytes()
-            command_bytes, details = convert_pdf_to_gpgl(pdf_bytes)
+            command_bytes, details = convert_pdf_to_gpgl(
+                pdf_bytes, steps_per_mm=self._settings.gpgl_steps_per_mm
+            )
+
+            # Move the files out of the inbox BEFORE inserting the job: if
+            # the insert then fails, the files sit in processed/ and no job
+            # exists (recoverable); the reverse order duplicates jobs when a
+            # crash lands between insert and move.
+            self._move_to_folder(
+                source=pdf_path,
+                target_folder=self._settings.ingest_processed_dir,
+            )
+            if sidecar_path and sidecar_path.exists():
+                self._move_to_folder(
+                    source=sidecar_path,
+                    target_folder=self._settings.ingest_processed_dir,
+                )
+
             job_id = self._store.create_job(
                 name=job_name,
                 barcode_link_info=barcode_link_info,
@@ -146,16 +228,6 @@ class HeadlessIngestWorker:
                 regmark_ry=regmark_ry,
                 command_sequence=command_bytes,
             )
-
-            self._move_to_folder(
-                source=pdf_path,
-                target_folder=self._settings.ingest_processed_dir,
-            )
-            if sidecar_path and sidecar_path.exists():
-                self._move_to_folder(
-                    source=sidecar_path,
-                    target_folder=self._settings.ingest_processed_dir,
-                )
 
             with self._state_lock:
                 self._processed_count += 1
@@ -182,8 +254,11 @@ class HeadlessIngestWorker:
             pdf_path.with_suffix(".json"),
         ]
         for candidate in candidates:
-            if candidate.exists() and candidate.is_file():
-                return candidate
+            try:
+                if candidate.exists() and candidate.is_file():
+                    return candidate
+            except OSError:
+                continue
         return None
 
     @staticmethod
@@ -200,7 +275,7 @@ class HeadlessIngestWorker:
         raw_barcode = metadata.get("barcode_link_info")
         if raw_barcode is None:
             # Fallback: infer barcode from filename.
-            match = BARCODE_PATTERN.search(pdf_path.stem.upper())
+            match = BARCODE_TOKEN_PATTERN.search(pdf_path.stem.upper())
             if match:
                 raw_barcode = match.group(0)
 
@@ -226,23 +301,31 @@ class HeadlessIngestWorker:
         error_message = f"{type(exc).__name__}: {exc}"
         logger.warning("Failed to import %s: %s", pdf_path.name, error_message)
 
-        self._move_to_folder(
-            source=pdf_path,
-            target_folder=self._settings.ingest_error_dir,
-        )
-        if sidecar_path and sidecar_path.exists():
-            self._move_to_folder(
-                source=sidecar_path,
-                target_folder=self._settings.ingest_error_dir,
-            )
+        try:
+            if pdf_path.exists():
+                self._move_to_folder(
+                    source=pdf_path,
+                    target_folder=self._settings.ingest_error_dir,
+                )
+            if sidecar_path and sidecar_path.exists():
+                self._move_to_folder(
+                    source=sidecar_path,
+                    target_folder=self._settings.ingest_error_dir,
+                )
 
-        error_log_path = (
-            self._settings.ingest_error_dir
-            / f"{pdf_path.stem}.error.txt"
-        )
-        error_log_path.write_text(
-            error_message + "\n", encoding="utf-8"
-        )
+            error_log_path = (
+                self._settings.ingest_error_dir
+                / f"{pdf_path.stem}.error.txt"
+            )
+            error_log_path.write_text(
+                error_message + "\n", encoding="utf-8"
+            )
+        except Exception as move_exc:  # noqa: BLE001
+            logger.exception(
+                "Failed while moving %s to error folder: %s",
+                pdf_path.name,
+                move_exc,
+            )
 
         with self._state_lock:
             self._error_count += 1
@@ -258,4 +341,3 @@ class HeadlessIngestWorker:
             target_path = target_folder / f"{timestamp}_{counter}_{source.name}"
             counter += 1
         shutil.move(str(source), str(target_path))
-

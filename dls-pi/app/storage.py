@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import sqlite3
 import threading
 from typing import Iterable, Optional
 
-from .models import CutJob
+from .models import CutJob, CutJobMeta
 
 
 class JobStore:
@@ -17,8 +17,13 @@ class JobStore:
         self._lock = threading.Lock()
         self._init_schema()
 
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
     def _init_schema(self) -> None:
         with self._lock:
+            self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS jobs (
@@ -54,6 +59,7 @@ class JobStore:
         regmark_ry: int,
         command_sequence: bytes,
     ) -> int:
+        created_at = datetime.now(timezone.utc).isoformat()
         with self._lock:
             cursor = self._conn.execute(
                 """
@@ -65,9 +71,10 @@ class JobStore:
                     regmark_fy,
                     regmark_rx,
                     regmark_ry,
-                    command_sequence
+                    command_sequence,
+                    created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     name,
@@ -78,6 +85,7 @@ class JobStore:
                     regmark_rx,
                     regmark_ry,
                     command_sequence,
+                    created_at,
                 ),
             )
             return int(cursor.lastrowid)
@@ -108,21 +116,40 @@ class JobStore:
             rows = self._conn.execute(query, params).fetchall()
         return [self._row_to_cut_job(row) for row in rows]
 
-    def find_jobs_for_barcode(self, barcode_link_info: str) -> list[CutJob]:
+    def find_job_metas_for_barcode(
+        self, barcode_link_info: str, *, limit: int = 8
+    ) -> list[CutJobMeta]:
+        """Most-recent jobs for a barcode, metadata only.
+
+        Newest first, so a re-submitted job shadows stale ones instead of
+        being unreachable behind them. Command BLOBs are loaded lazily via
+        get_job() once the cutter has actually selected a job.
+        """
         with self._lock:
             rows = self._conn.execute(
                 """
-                SELECT * FROM jobs
+                SELECT id, name, barcode_link_info, command_type,
+                       regmark_fx, regmark_fy, regmark_rx, regmark_ry,
+                       created_at
+                FROM jobs
                 WHERE barcode_link_info = ?
-                ORDER BY id ASC
+                ORDER BY id DESC
+                LIMIT ?
                 """,
-                (barcode_link_info,),
+                (barcode_link_info, limit),
             ).fetchall()
-        return [self._row_to_cut_job(row) for row in rows]
+        return [self._row_to_cut_job_meta(row) for row in rows]
 
     @staticmethod
-    def _row_to_cut_job(row: sqlite3.Row) -> CutJob:
-        created_at = datetime.fromisoformat(str(row["created_at"]))
+    def _parse_created_at(raw: str) -> datetime:
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is None:
+            # Legacy rows were written by SQLite's datetime('now') in UTC.
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    @classmethod
+    def _row_to_cut_job(cls, row: sqlite3.Row) -> CutJob:
         return CutJob(
             id=int(row["id"]),
             name=str(row["name"]),
@@ -133,6 +160,19 @@ class JobStore:
             regmark_rx=int(row["regmark_rx"]),
             regmark_ry=int(row["regmark_ry"]),
             command_sequence=bytes(row["command_sequence"]),
-            created_at=created_at,
+            created_at=cls._parse_created_at(str(row["created_at"])),
         )
 
+    @classmethod
+    def _row_to_cut_job_meta(cls, row: sqlite3.Row) -> CutJobMeta:
+        return CutJobMeta(
+            id=int(row["id"]),
+            name=str(row["name"]),
+            barcode_link_info=str(row["barcode_link_info"]),
+            command_type=int(row["command_type"]),
+            regmark_fx=int(row["regmark_fx"]),
+            regmark_fy=int(row["regmark_fy"]),
+            regmark_rx=int(row["regmark_rx"]),
+            regmark_ry=int(row["regmark_ry"]),
+            created_at=cls._parse_created_at(str(row["created_at"])),
+        )

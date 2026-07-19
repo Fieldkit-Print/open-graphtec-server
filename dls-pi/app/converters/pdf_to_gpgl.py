@@ -10,27 +10,27 @@ from ..protocol import ETX
 
 
 POINT_TO_MM = 25.4 / 72.0
+# GP-GL step size: 10 steps/mm = the 0.1 mm factory default. Must match the
+# cutter's STEP SIZE setting (readable via TC2007,4) or all geometry scales.
+DEFAULT_STEPS_PER_MM = 10
+
+# Coordinate pairs per emitted D command. GP-GL allows long parameter lists;
+# splitting keeps individual commands reviewable without lifting the tool
+# (consecutive D commands continue drawing from the current position).
+MAX_PAIRS_PER_D_COMMAND = 50
+
 Point = tuple[float, float]
 Segment = tuple[float, float, float, float]
 
 
-def _to_0p1mm(value_in_points: float) -> int:
+def _pt_to_steps(value_in_points: float, steps_per_mm: int) -> int:
     mm = value_in_points * POINT_TO_MM
-    return int(round(mm * 10.0))
+    return int(round(mm * steps_per_mm))
 
 
-def _segment_to_gpgl_points(
-    x0_pt: float, y0_pt: float, x1_pt: float, y1_pt: float
-) -> tuple[int, int, int, int]:
-    return (
-        _to_0p1mm(x0_pt),
-        _to_0p1mm(y0_pt),
-        _to_0p1mm(x1_pt),
-        _to_0p1mm(y1_pt),
-    )
-
-
-def _distance_point_to_line(point: Point, line_start: Point, line_end: Point) -> float:
+def _distance_point_to_segment(
+    point: Point, line_start: Point, line_end: Point
+) -> float:
     x, y = point
     x1, y1 = line_start
     x2, y2 = line_end
@@ -40,9 +40,13 @@ def _distance_point_to_line(point: Point, line_start: Point, line_end: Point) ->
     if dx == 0.0 and dy == 0.0:
         return hypot(x - x1, y - y1)
 
-    num = abs(dy * x - dx * y + x2 * y1 - y2 * x1)
-    den = hypot(dx, dy)
-    return num / den
+    # Clamp the projection onto the chord so control points beyond the
+    # endpoints still measure their true distance from the chord segment.
+    t = ((x - x1) * dx + (y - y1) * dy) / (dx * dx + dy * dy)
+    t = max(0.0, min(1.0, t))
+    px = x1 + t * dx
+    py = y1 + t * dy
+    return hypot(x - px, y - py)
 
 
 def _flatten_cubic_bezier(
@@ -57,8 +61,8 @@ def _flatten_cubic_bezier(
     def recurse(
         q0: Point, q1: Point, q2: Point, q3: Point, depth: int
     ) -> list[Point]:
-        d1 = _distance_point_to_line(q1, q0, q3)
-        d2 = _distance_point_to_line(q2, q0, q3)
+        d1 = _distance_point_to_segment(q1, q0, q3)
+        d2 = _distance_point_to_segment(q2, q0, q3)
         if (max(d1, d2) <= tolerance_points) or (depth >= max_depth):
             return [q0, q3]
 
@@ -77,15 +81,23 @@ def _flatten_cubic_bezier(
     return recurse(p0, p1, p2, p3, 0)
 
 
-def _to_point(value: Any) -> Point:
+def _to_page_point(value: Any, page_height: float) -> Point:
+    """Convert a pdfplumber path/pts coordinate to PDF page space.
+
+    pdfplumber curve `path`/`pts` coordinates are TOP-based (y grows
+    downward), unlike line/rect x0/y0/x1/y1 which are bottom-based. All
+    segments in this module are kept in PDF space (origin bottom-left,
+    y up), so top-based inputs are flipped here.
+    """
     if isinstance(value, (list, tuple)) and len(value) >= 2:
-        return (float(value[0]), float(value[1]))
+        return (float(value[0]), page_height - float(value[1]))
     raise ValueError(f"Path point format is not supported: {value!r}")
 
 
 def _add_path_segments_from_curve(
     curve_obj: dict[str, Any],
     *,
+    page_height: float,
     tolerance_points: float,
 ) -> list[Segment]:
     segments: list[Segment] = []
@@ -95,8 +107,8 @@ def _add_path_segments_from_curve(
         pts = curve_obj.get("pts") or []
         if len(pts) >= 2:
             for i in range(len(pts) - 1):
-                p0 = _to_point(pts[i])
-                p1 = _to_point(pts[i + 1])
+                p0 = _to_page_point(pts[i], page_height)
+                p1 = _to_page_point(pts[i + 1], page_height)
                 segments.append((p0[0], p0[1], p1[0], p1[1]))
         return segments
 
@@ -110,7 +122,7 @@ def _add_path_segments_from_curve(
         params = command[1:]
 
         if op == "m":
-            current = _to_point(params[0])
+            current = _to_page_point(params[0], page_height)
             subpath_start = current
             continue
 
@@ -118,15 +130,15 @@ def _add_path_segments_from_curve(
             continue
 
         if op == "l":
-            end = _to_point(params[0])
+            end = _to_page_point(params[0], page_height)
             segments.append((current[0], current[1], end[0], end[1]))
             current = end
             continue
 
         if op == "c":
-            c1 = _to_point(params[0])
-            c2 = _to_point(params[1])
-            end = _to_point(params[2])
+            c1 = _to_page_point(params[0], page_height)
+            c2 = _to_page_point(params[1], page_height)
+            end = _to_page_point(params[2], page_height)
             points = _flatten_cubic_bezier(
                 current, c1, c2, end, tolerance_points=tolerance_points
             )
@@ -139,8 +151,8 @@ def _add_path_segments_from_curve(
 
         if op == "v":
             c1 = current
-            c2 = _to_point(params[0])
-            end = _to_point(params[1])
+            c2 = _to_page_point(params[0], page_height)
+            end = _to_page_point(params[1], page_height)
             points = _flatten_cubic_bezier(
                 current, c1, c2, end, tolerance_points=tolerance_points
             )
@@ -152,8 +164,8 @@ def _add_path_segments_from_curve(
             continue
 
         if op == "y":
-            c1 = _to_point(params[0])
-            end = _to_point(params[1])
+            c1 = _to_page_point(params[0], page_height)
+            end = _to_page_point(params[1], page_height)
             c2 = end
             points = _flatten_cubic_bezier(
                 current, c1, c2, end, tolerance_points=tolerance_points
@@ -186,22 +198,34 @@ def _collect_segments(
         "rect_objects": 0,
         "curve_objects": 0,
     }
+    page_height = float(page.height)
 
     for line in page.lines:
         counts["line_objects"] += 1
-        segments.append(
-            (
-                float(line["x0"]),
-                float(line["y0"]),
-                float(line["x1"]),
-                float(line["y1"]),
+        pts = line.get("pts")
+        if isinstance(pts, (list, tuple)) and len(pts) >= 2:
+            # pts carries the true endpoints; x0/y0/x1/y1 is a normalized
+            # bounding box that silently mirrors negative-slope lines.
+            for i in range(len(pts) - 1):
+                p0 = _to_page_point(pts[i], page_height)
+                p1 = _to_page_point(pts[i + 1], page_height)
+                segments.append((p0[0], p0[1], p1[0], p1[1]))
+        else:
+            segments.append(
+                (
+                    float(line["x0"]),
+                    float(line["y0"]),
+                    float(line["x1"]),
+                    float(line["y1"]),
+                )
             )
-        )
 
     for rect in page.rects:
         if rect.get("stroke") is False:
             continue
         counts["rect_objects"] += 1
+        # Rect x0/y0/x1/y1 are bottom-based and axis-aligned: the bbox IS
+        # the geometry, so no endpoint recovery is needed.
         x0 = float(rect["x0"])
         x1 = float(rect["x1"])
         y0 = float(rect["y0"])
@@ -221,19 +245,26 @@ def _collect_segments(
         counts["curve_objects"] += 1
         segments.extend(
             _add_path_segments_from_curve(
-                curve, tolerance_points=curve_tolerance_points
+                curve,
+                page_height=page_height,
+                tolerance_points=curve_tolerance_points,
             )
         )
 
     return segments, counts
 
 
-def _deduplicate_segments(segments: list[Segment]) -> list[tuple[int, int, int, int]]:
+def _deduplicate_segments(
+    segments: list[Segment], *, steps_per_mm: int
+) -> list[tuple[int, int, int, int]]:
     deduped: list[tuple[int, int, int, int]] = []
     seen: set[tuple[int, int, int, int]] = set()
 
     for x0_pt, y0_pt, x1_pt, y1_pt in segments:
-        x0, y0, x1, y1 = _segment_to_gpgl_points(x0_pt, y0_pt, x1_pt, y1_pt)
+        x0 = _pt_to_steps(x0_pt, steps_per_mm)
+        y0 = _pt_to_steps(y0_pt, steps_per_mm)
+        x1 = _pt_to_steps(x1_pt, steps_per_mm)
+        y1 = _pt_to_steps(y1_pt, steps_per_mm)
         if x0 == x1 and y0 == y1:
             continue
 
@@ -260,7 +291,10 @@ def _build_gpgl_command_from_segments(
         point_to_indexes.setdefault((x1, y1), set()).add(idx)
 
     unvisited = set(range(len(segments)))
-    command_parts = ["J1,"]
+    # Every command is individually terminated with ETX: GP-GL requires a
+    # terminator after the last parameter of each variable-length command,
+    # and a missing one is a data error that inhibits further commands.
+    command_parts = [f"J1{ETX}"]
 
     def mark_visited(index: int) -> None:
         if index not in unvisited:
@@ -270,11 +304,18 @@ def _build_gpgl_command_from_segments(
         point_to_indexes.get((x0, y0), set()).discard(index)
         point_to_indexes.get((x1, y1), set()).discard(index)
 
+    def flush_draw(points: list[tuple[int, int]]) -> None:
+        while points:
+            batch = points[:MAX_PAIRS_PER_D_COMMAND]
+            del points[:MAX_PAIRS_PER_D_COMMAND]
+            coords = ",".join(f"{x},{y}" for x, y in batch)
+            command_parts.append(f"D{coords}{ETX}")
+
     while unvisited:
         start_index = min(unvisited)
         x0, y0, x1, y1 = segments[start_index]
-        command_parts.append(f"M{x0},{y0},")
-        command_parts.append(f"D{x1},{y1},")
+        command_parts.append(f"M{x0},{y0}{ETX}")
+        draw_points: list[tuple[int, int]] = [(x1, y1)]
         mark_visited(start_index)
         current = (x1, y1)
 
@@ -290,11 +331,15 @@ def _build_gpgl_command_from_segments(
                 next_point = (sx, sy)
             else:
                 break
-            command_parts.append(f"D{next_point[0]},{next_point[1]},")
+            draw_points.append(next_point)
             mark_visited(next_index)
             current = next_point
 
-    command_parts.append(ETX)
+        flush_draw(draw_points)
+
+    # End tool-up at the origin so the blade is not left dragging in the
+    # media after the final cut (GP-GL has no standalone pen-up command).
+    command_parts.append(f"M0,0{ETX}")
     return "".join(command_parts).encode("ascii", errors="ignore")
 
 
@@ -304,7 +349,11 @@ def convert_pdf_to_gpgl(
     max_segments: int = 20000,
     strict_vectors_only: bool = True,
     curve_tolerance_points: float = 0.5,
+    steps_per_mm: int = DEFAULT_STEPS_PER_MM,
 ) -> tuple[bytes, dict[str, Any]]:
+    if steps_per_mm <= 0:
+        raise ValueError("steps_per_mm must be a positive integer.")
+
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         if not pdf.pages:
             raise ValueError("PDF has no pages.")
@@ -319,6 +368,8 @@ def convert_pdf_to_gpgl(
         segments, counts = _collect_segments(
             page, curve_tolerance_points=curve_tolerance_points
         )
+        page_width = float(page.width)
+        page_height = float(page.height)
 
     if not segments:
         raise ValueError(
@@ -326,7 +377,9 @@ def convert_pdf_to_gpgl(
             "Expected stroked vector paths/lines."
         )
 
-    deduped_segments = _deduplicate_segments(segments)
+    deduped_segments = _deduplicate_segments(
+        segments, steps_per_mm=steps_per_mm
+    )
     if not deduped_segments:
         raise ValueError(
             "Vector objects were found, but no usable cut segments remained "
@@ -341,12 +394,10 @@ def convert_pdf_to_gpgl(
 
     command_sequence = _build_gpgl_command_from_segments(deduped_segments)
 
-    page_width_0p1mm = _to_0p1mm(float(page.width))
-    page_height_0p1mm = _to_0p1mm(float(page.height))
-
     details: dict[str, Any] = {
-        "page_width_0p1mm": page_width_0p1mm,
-        "page_height_0p1mm": page_height_0p1mm,
+        "page_width_steps": _pt_to_steps(page_width, steps_per_mm),
+        "page_height_steps": _pt_to_steps(page_height, steps_per_mm),
+        "steps_per_mm": steps_per_mm,
         "segment_count_raw": len(segments),
         "segment_count": len(deduped_segments),
         "line_objects": counts["line_objects"],
@@ -354,8 +405,5 @@ def convert_pdf_to_gpgl(
         "curve_objects": counts["curve_objects"],
         "strict_vectors_only": strict_vectors_only,
         "curve_tolerance_points": curve_tolerance_points,
-        "converter_note": (
-            "Hardened converter: stroked lines/rectangles/curves on first page."
-        ),
     }
     return command_sequence, details

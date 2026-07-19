@@ -34,5 +34,23 @@ curl http://localhost:8080/health
 ## Important behavior
 
 - No web UI pages are exposed.
-- Jobs are matched by `barcode_link_info`.
-- Converter is strict vector-only by default.
+- Jobs are matched by `barcode_link_info` (newest 8 jobs offered first).
+- Converter is strict vector-only by default and emits GP-GL only
+  (`command_type` must be 0 on PDF paths).
+- Job names are limited to 25 printable ASCII characters (cutter panel limit).
+- Set `API_KEY` to require an `X-API-Key` header on all endpoints except
+  `/health`.
+- Set `GPGL_STEPS_PER_MM` to match the cutter's GP-GL STEP SIZE setting
+  (10 = 0.1 mm factory default).
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+The suite includes a fake cutter (`tests/fake_cutter.py`) that speaks the
+cutter side of the ESC.d1-d6 Data Link protocol over TCP, with fault
+injection for truncated responses and missing ETX terminators. Converter
+tests build minimal PDFs in-memory and assert on the exact GP-GL output.

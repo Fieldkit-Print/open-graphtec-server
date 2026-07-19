@@ -12,6 +12,10 @@ def _bool_from_env(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
 @dataclass(frozen=True)
 class Settings:
     app_data_dir: Path
@@ -37,6 +41,10 @@ class Settings:
     ingest_enabled: bool
     ingest_poll_interval_seconds: float
     ingest_file_min_age_seconds: float
+
+    api_key: str
+    max_upload_bytes: int
+    gpgl_steps_per_mm: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -75,11 +83,16 @@ class Settings:
             api_host=os.getenv("API_HOST", "0.0.0.0"),
             api_port=int(os.getenv("API_PORT", "8080")),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
-            dls_enabled=_bool_from_env("DLS_ENABLED", True),
-            dls_poll_interval_seconds=float(
-                os.getenv("DLS_POLL_INTERVAL_SECONDS", "1.0")
+            # Off by default: the same default as the compose files, and a
+            # bare-metal run should not poll 127.0.0.1:9100 unasked.
+            dls_enabled=_bool_from_env("DLS_ENABLED", False),
+            # Spec ranges (DLS guideline): poll 0.5-2.0 s, timeout 3-10 s.
+            dls_poll_interval_seconds=_clamp(
+                float(os.getenv("DLS_POLL_INTERVAL_SECONDS", "1.0")), 0.5, 2.0
             ),
-            dls_timeout_seconds=float(os.getenv("DLS_TIMEOUT_SECONDS", "5.0")),
+            dls_timeout_seconds=_clamp(
+                float(os.getenv("DLS_TIMEOUT_SECONDS", "5.0")), 3.0, 10.0
+            ),
             cutter_host=os.getenv("CUTTER_HOST", "127.0.0.1"),
             cutter_port=int(os.getenv("CUTTER_PORT", "9100")),
             send_retry_total_ms=int(os.getenv("SEND_RETRY_TOTAL_MS", "3000")),
@@ -93,4 +106,12 @@ class Settings:
             ingest_file_min_age_seconds=float(
                 os.getenv("INGEST_FILE_MIN_AGE_SECONDS", "2.0")
             ),
+            # Empty string = auth disabled (trusted-network mode).
+            api_key=os.getenv("API_KEY", "").strip(),
+            max_upload_bytes=int(
+                os.getenv("MAX_UPLOAD_BYTES", str(20 * 1024 * 1024))
+            ),
+            # Steps per mm of the cutter's GP-GL STEP SIZE setting
+            # (10 = 0.1 mm factory default; also 20, 40, or 100).
+            gpgl_steps_per_mm=int(os.getenv("GPGL_STEPS_PER_MM", "10")),
         )

@@ -1,12 +1,23 @@
 from __future__ import annotations
 
+import asyncio
 import base64
-from datetime import datetime
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 import logging
 import re
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 
 from .config import Settings
 from .converters.pdf_to_gpgl import convert_pdf_to_gpgl
@@ -18,7 +29,7 @@ from .models import (
     JobDetails,
     JobSummary,
 )
-from .protocol import ETX
+from .protocol import ETX, validate_job_name
 from .storage import JobStore
 
 
@@ -36,10 +47,18 @@ def _validate_barcode_link_info(value: str) -> str:
             status_code=400,
             detail=(
                 "barcode_link_info must be 9 alphanumeric characters "
-                "(example: G0100ABCD)."
+                "(example: A0100ABCD)."
             ),
         )
     return barcode
+
+
+def _validate_job_name_or_400(value: str) -> str:
+    name = value.strip()
+    try:
+        return validate_job_name(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _decode_command_sequence(
@@ -55,10 +74,11 @@ def _decode_command_sequence(
     else:
         raw = command_sequence.encode("utf-8", errors="ignore")
 
-    if append_etx and not raw.endswith(ETX.encode("ascii")):
-        raw += ETX.encode("ascii")
+    etx = ETX.encode("ascii")
+    if append_etx and not raw.endswith(etx):
+        raw += etx
 
-    if not raw:
+    if not raw or raw.strip(etx) == b"":
         raise HTTPException(status_code=400, detail="command_sequence is empty.")
     return raw
 
@@ -101,34 +121,54 @@ store = JobStore(str(settings.database_path))
 dls_worker = DataLinkServerWorker(settings=settings, store=store)
 ingest_worker = HeadlessIngestWorker(settings=settings, store=store)
 
-app = FastAPI(
-    title="Open Graphtec Server",
-    version="0.1.0",
-    description=(
-        "Headless Graphtec Data Link service with network cut-file intake."
-    ),
-    docs_url=None,
-    redoc_url=None,
-    openapi_url=None,
-)
+
+async def require_api_key(request: Request) -> None:
+    """Reject requests without the configured API key.
+
+    When API_KEY is unset the service runs open (trusted-network mode),
+    matching the documented deployment model.
+    """
+    if not settings.api_key:
+        return
+    provided = request.headers.get("X-API-Key", "")
+    if provided != settings.api_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key.")
 
 
-@app.on_event("startup")
-def startup_event() -> None:
-    logger.info("API startup at %s", datetime.utcnow().isoformat() + "Z")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info(
+        "API startup at %s", datetime.now(timezone.utc).isoformat()
+    )
+    if not settings.api_key:
+        logger.warning(
+            "API_KEY is not set: all endpoints are unauthenticated. "
+            "Run only on a trusted network."
+        )
     if settings.ingest_enabled:
         ingest_worker.start()
         logger.info("Headless ingest worker autostart is enabled.")
     if settings.dls_enabled:
         dls_worker.start()
         logger.info("DLS worker autostart is enabled.")
-
-
-@app.on_event("shutdown")
-def shutdown_event() -> None:
+    yield
     ingest_worker.stop()
     dls_worker.stop()
+    store.close()
     logger.info("API shutdown complete.")
+
+
+app = FastAPI(
+    title="Open Graphtec Server",
+    version="0.2.0",
+    description=(
+        "Headless Graphtec Data Link service with network cut-file intake."
+    ),
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+    lifespan=lifespan,
+)
 
 
 @app.get("/health")
@@ -142,39 +182,68 @@ def health() -> dict[str, object]:
     }
 
 
-@app.get("/ingest/status")
+@app.get("/ingest/status", dependencies=[Depends(require_api_key)])
 def ingest_status() -> dict[str, object]:
     return ingest_worker.get_status()
 
 
-@app.get("/dls/status")
+@app.post("/ingest/start", dependencies=[Depends(require_api_key)])
+def ingest_start() -> dict[str, object]:
+    ingest_worker.start()
+    return ingest_worker.get_status()
+
+
+@app.post("/ingest/stop", dependencies=[Depends(require_api_key)])
+def ingest_stop() -> dict[str, object]:
+    ingest_worker.stop()
+    return ingest_worker.get_status()
+
+
+@app.get("/dls/status", dependencies=[Depends(require_api_key)])
 def dls_status() -> dict[str, object]:
     return dls_worker.get_status()
 
 
-@app.post("/dls/start")
+@app.post("/dls/start", dependencies=[Depends(require_api_key)])
 def dls_start() -> dict[str, object]:
-    dls_worker.start()
-    return dls_worker.get_status()
+    started = dls_worker.start()
+    status = dls_worker.get_status()
+    status["start_accepted"] = started
+    return status
 
 
-@app.post("/dls/stop")
+@app.post("/dls/stop", dependencies=[Depends(require_api_key)])
 def dls_stop() -> dict[str, object]:
-    dls_worker.stop()
-    return dls_worker.get_status()
+    stopped = dls_worker.stop()
+    status = dls_worker.get_status()
+    status["stop_completed"] = stopped
+    return status
 
 
-@app.post("/jobs/import-json", response_model=ImportJobResponse)
+@app.post(
+    "/jobs/import-json",
+    response_model=ImportJobResponse,
+    dependencies=[Depends(require_api_key)],
+)
 def import_json_job(request: ImportJsonJobRequest) -> ImportJobResponse:
+    name = _validate_job_name_or_400(request.name)
     barcode = _validate_barcode_link_info(request.barcode_link_info)
     command_bytes = _decode_command_sequence(
         request.command_sequence,
         request.command_sequence_encoding,
         request.append_etx,
     )
+    if len(command_bytes) > settings.max_upload_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"command_sequence is {len(command_bytes)} bytes; maximum "
+                f"allowed is {settings.max_upload_bytes}."
+            ),
+        )
 
     job_id = store.create_job(
-        name=request.name.strip(),
+        name=name,
         barcode_link_info=barcode,
         command_type=request.command_type,
         regmark_fx=request.regmark_fx,
@@ -186,14 +255,18 @@ def import_json_job(request: ImportJsonJobRequest) -> ImportJobResponse:
 
     return ImportJobResponse(
         job_id=job_id,
-        name=request.name.strip(),
+        name=name,
         barcode_link_info=barcode,
         command_type=request.command_type,
         command_length=len(command_bytes),
     )
 
 
-@app.post("/jobs/import-pdf", response_model=ImportJobResponse)
+@app.post(
+    "/jobs/import-pdf",
+    response_model=ImportJobResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def import_pdf_job(
     file: UploadFile = File(...),
     name: str = Form(...),
@@ -204,23 +277,43 @@ async def import_pdf_job(
     regmark_rx: int = Form(0),
     regmark_ry: int = Form(0),
 ) -> ImportJobResponse:
-    if command_type not in (0, 1):
+    if command_type != 0:
+        # The converter emits GP-GL only; declaring HP-GL via ESC.d6 would
+        # make an AUTO-mode cutter mis-parse the job.
         raise HTTPException(
-            status_code=400, detail="command_type must be 0 (GP-GL) or 1 (HP-GL)."
+            status_code=400,
+            detail=(
+                "command_type must be 0 (GP-GL) for PDF import: the "
+                "converter emits GP-GL only."
+            ),
         )
+    job_name = _validate_job_name_or_400(name)
     barcode = _validate_barcode_link_info(barcode_link_info)
 
     raw_pdf = await file.read()
     if not raw_pdf:
         raise HTTPException(status_code=400, detail="Uploaded PDF is empty.")
+    if len(raw_pdf) > settings.max_upload_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Uploaded PDF is {len(raw_pdf)} bytes; maximum allowed is "
+                f"{settings.max_upload_bytes}."
+            ),
+        )
 
     try:
-        command_bytes, details = convert_pdf_to_gpgl(raw_pdf)
+        # pdfplumber parsing is CPU-bound; keep it off the event loop.
+        command_bytes, details = await asyncio.to_thread(
+            convert_pdf_to_gpgl,
+            raw_pdf,
+            steps_per_mm=settings.gpgl_steps_per_mm,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     job_id = store.create_job(
-        name=name.strip(),
+        name=job_name,
         barcode_link_info=barcode,
         command_type=command_type,
         regmark_fx=regmark_fx,
@@ -232,18 +325,22 @@ async def import_pdf_job(
 
     return ImportJobResponse(
         job_id=job_id,
-        name=name.strip(),
+        name=job_name,
         barcode_link_info=barcode,
         command_type=command_type,
         command_length=len(command_bytes),
         notes=(
-            f"Converted PDF to starter GP-GL sequence, "
+            f"Converted PDF to GP-GL sequence, "
             f"segments={details['segment_count']}"
         ),
     )
 
 
-@app.get("/jobs", response_model=list[JobSummary])
+@app.get(
+    "/jobs",
+    response_model=list[JobSummary],
+    dependencies=[Depends(require_api_key)],
+)
 def list_jobs(
     barcode_link_info: Optional[str] = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
@@ -256,7 +353,11 @@ def list_jobs(
     return [_job_to_summary(job) for job in jobs]
 
 
-@app.get("/jobs/{job_id}", response_model=JobDetails)
+@app.get(
+    "/jobs/{job_id}",
+    response_model=JobDetails,
+    dependencies=[Depends(require_api_key)],
+)
 def get_job(job_id: int) -> JobDetails:
     job = store.get_job(job_id)
     if job is None:
