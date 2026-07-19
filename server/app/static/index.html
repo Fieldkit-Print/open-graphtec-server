@@ -124,7 +124,11 @@
 <body>
 <header>
   <div class="wordmark">Open <span>Graphtec</span> Server</div>
-  <div class="conn"><span class="dot" id="conn-dot" style="background:var(--muted)"></span><span id="conn-text">connecting…</span></div>
+  <div class="conn">
+    <span class="dot" id="conn-dot" style="background:var(--muted)"></span><span id="conn-text">connecting…</span>
+    <span aria-hidden="true" style="color:var(--hairline)">·</span>
+    <span class="dot" id="hf-dot" style="background:var(--muted)"></span><span id="hf-text">hot folder</span>
+  </div>
 </header>
 
 <section>
@@ -139,7 +143,6 @@
 
 <section>
   <h2>Cut jobs</h2>
-  <div class="sub status-line" id="hotfolder" style="margin:-4px 0 10px; font-size:12.5px; color:var(--ink-2)"></div>
   <div id="jobs-wrap"><div class="empty">Loading…</div></div>
   <div class="keyrow" id="keyrow">
     <input id="key-input" type="password" placeholder="API key required" aria-label="API key">
@@ -207,13 +210,15 @@ async function pollHealth() {
   $("cutters").innerHTML = cutters.length
     ? cutters.map(cutterTile).join("")
     : '<div class="empty">No cutters configured.</div>';
-  $("hotfolder").innerHTML =
-    `<span class="dot" style="background:${ing.is_running ? "var(--good)" : "var(--muted)"}"></span>
-     <span>Hot folder ${ing.is_running ? "watching" : "stopped"}
-       · ${ing.processed_count ?? 0} processed
-       · ${ing.error_count ?? 0} errors` +
-    (ing.last_processed_file ? ` · last: ${esc(ing.last_processed_file)}` : "") +
-    `</span>`;
+  const hfErrors = ing.error_count ?? 0;
+  $("hf-dot").style.background = ing.is_running
+    ? (hfErrors ? "var(--warning)" : "var(--good)") : "var(--muted)";
+  $("hf-text").textContent =
+    `hot folder ${ing.is_running ? "watching" : "stopped"}` +
+    (hfErrors ? ` · ${hfErrors} error${hfErrors === 1 ? "" : "s"}` : "");
+  $("hf-text").title =
+    `${ing.processed_count ?? 0} processed` +
+    (ing.last_processed_file ? ` · last: ${ing.last_processed_file}` : "");
 
   const showCutterTag = cutters.length > 1;
   const events = cutters
