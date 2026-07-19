@@ -36,7 +36,9 @@ the cutter pulls its own work.
 ## Supported hardware
 
 Data Link–capable Graphtec models (FC9000, CE7000 and newer grit-rolling
-models) connected via LAN on TCP 9100. Development and validation were done
+models) connected via LAN on TCP 9100. Multiple cutters can share one
+server and one job library: each machine is offered the jobs matching
+the barcode it scanned. Development and validation were done
 on an FC9000-140 (firmware V1.39).
 
 ## Quick start
@@ -95,12 +97,17 @@ All endpoints except `/` and `/health` require an `X-API-Key` header when
 |---|---|---|
 | GET | `/` | Status UI (HTML) |
 | GET | `/health` | Full service health snapshot |
-| GET | `/dls/status` | Data Link worker state + recent events |
-| POST | `/dls/start` · `/dls/stop` | Control the Data Link worker |
+| GET | `/dls/status` | Per-cutter Data Link state (`?cutter=name` for one) |
+| GET | `/dls/events` | Activity log across cutters |
+| POST | `/dls/start` · `/dls/stop` | Control Data Link workers (all, or `?cutter=name`) |
 | GET | `/ingest/status` | Hot-folder worker state |
 | POST | `/ingest/start` · `/ingest/stop` | Control the hot-folder worker |
 | GET | `/jobs` | List jobs (filter: `barcode_link_info`) |
 | GET | `/jobs/{id}` | Job details |
+| GET | `/jobs/{id}/gpgl` | Download the stored command bytes |
+| DELETE | `/jobs/{id}` | Delete a job |
+| GET | `/cutter/info` | Live cutter identity/settings query |
+| GET | `/version` | Service name, version, server time |
 | POST | `/jobs/import-pdf` | Upload a PDF for conversion |
 | POST | `/jobs/import-json` | Import a raw GP-GL job |
 
@@ -110,7 +117,8 @@ Set in `.env` (see `.env.example` for the full list):
 
 | Variable | Meaning |
 |---|---|
-| `CUTTER_HOST` / `CUTTER_PORT` | Cutter address (port is normally 9100) |
+| `CUTTER_HOST` / `CUTTER_PORT` | Single-cutter address (port is normally 9100) |
+| `CUTTERS` | Multi-cutter setup: `left=10.0.0.4:9100,right=10.0.0.5` (overrides `CUTTER_HOST`) |
 | `DLS_ENABLED` | Poll the cutter (enable when one is connected) |
 | `INGEST_ENABLED` | Watch the hot folder |
 | `API_KEY` | Require `X-API-Key` on the API (empty = open) |
@@ -135,7 +143,7 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-The suite (55 tests) includes `tests/fake_cutter.py`, a scriptable TCP
+The suite (62 tests) includes `tests/fake_cutter.py`, a scriptable TCP
 implementation of the cutter side of the ESC.d1–d6 protocol with fault
 injection, plus golden-file converter tests built on in-memory PDFs.
 

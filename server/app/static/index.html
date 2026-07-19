@@ -7,349 +7,224 @@
 <style>
   :root {
     color-scheme: light;
-    --paper: #f7f5f0;
-    --ink: #191713;
-    --ink-2: #6b675e;
-    --hairline: #ddd8cc;
-    --accent: #2456b8;
-    --good: #0a7d0a;
-    --warn: #9a6b00;
-    --crit: #c22f2f;
-    --mark: #191713;          /* registration-mark ink */
+    --plane: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --hairline: #e1e0d9;
+    --border: rgba(11, 11, 11, 0.10);
+    --good: #0ca30c;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --accent: #2a78d6;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       color-scheme: dark;
-      --paper: #111315;
-      --ink: #f2f0ea;
-      --ink-2: #a19d92;
-      --hairline: #2b2f34;
-      --accent: #7ba4f5;
-      --good: #3fae3f;
-      --warn: #d9a13b;
-      --crit: #e05252;
-      --mark: #f2f0ea;
+      --plane: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --hairline: #2c2c2a;
+      --border: rgba(255, 255, 255, 0.10);
+      --accent: #3987e5;
     }
   }
   * { box-sizing: border-box; margin: 0; }
   body {
-    background: var(--paper);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--plane);
     color: var(--ink);
-    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
-    max-width: 980px;
+    padding: 24px;
+    max-width: 1080px;
     margin: 0 auto;
-    padding: 28px 24px 40px;
   }
-  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
-  .micro {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--ink-2);
-  }
-
-  /* ---- header strip ---- */
   header {
-    display: flex; align-items: center; gap: 14px;
-    padding-bottom: 14px; border-bottom: 1px solid var(--ink);
-    flex-wrap: wrap;
+    display: flex; align-items: baseline; gap: 12px;
+    margin-bottom: 20px; flex-wrap: wrap;
   }
-  .lockup {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 15px; font-weight: 700; letter-spacing: 0.08em;
+  .wordmark { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+  .wordmark span { color: var(--accent); }
+  .conn { margin-left: auto; font-size: 13px; color: var(--ink-2);
+          display: flex; align-items: center; gap: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block;
+         flex: none; }
+  .tiles {
+    display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    margin-bottom: 16px;
   }
-  .lockup em { font-style: normal; color: var(--accent); }
-  .machine { margin-left: auto; text-align: right; }
-  .machine .model { font-weight: 600; font-size: 13px; }
-  .heartbeat {
-    display: inline-block; width: 8px; height: 8px; margin-right: 6px;
-    background: var(--ink-2); vertical-align: baseline;
+  .tile {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
   }
-  .heartbeat.ok { background: var(--good); }
-  .heartbeat.bad { background: var(--crit); }
-  @media (prefers-reduced-motion: no-preference) {
-    .heartbeat.pulse { animation: pulse 0.4s ease-out; }
-    @keyframes pulse { from { transform: scale(1.7); } to { transform: scale(1); } }
+  .tile .label {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 6px;
   }
-
-  /* ---- state board, framed by registration marks ---- */
-  .board {
-    position: relative;
-    margin: 30px 8px 26px;
-    padding: 34px 40px 30px;
+  .tile .value { font-size: 19px; font-weight: 650; line-height: 1.25; }
+  .tile .sub { font-size: 12.5px; color: var(--ink-2); margin-top: 4px; }
+  .tile .sub.err { color: var(--critical); }
+  .status-line { display: flex; align-items: center; gap: 8px; }
+  section {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px; margin-bottom: 16px;
   }
-  .rm { position: absolute; width: 20px; height: 20px; }
-  .rm::before, .rm::after { content: ""; position: absolute; background: var(--mark); }
-  .rm::before { width: 100%; height: 2px; }
-  .rm::after  { width: 2px; height: 100%; }
-  .rm.tl { top: 0; left: 0; }
-  .rm.tr { top: 0; right: 0; }   .rm.tr::before { right: 0; } .rm.tr::after { right: 0; }
-  .rm.bl { bottom: 0; left: 0; } .rm.bl::before { bottom: 0; }
-  .rm.br { bottom: 0; right: 0; }
-  .rm.br::before { bottom: 0; right: 0; } .rm.br::after { right: 0; }
-
-  .state-word {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: clamp(34px, 7vw, 56px);
-    font-weight: 700; letter-spacing: 0.06em; line-height: 1.05;
-  }
-  .state-word.good { color: var(--good); }
-  .state-word.warn { color: var(--warn); }
-  .state-word.crit { color: var(--crit); }
-  .state-sub { color: var(--ink-2); margin-top: 6px; font-size: 13.5px; }
-  .state-sub strong { color: var(--crit); font-weight: 600; }
-
-  .track {
-    display: flex; gap: 0; margin-top: 24px;
-    border-top: 1px solid var(--hairline); padding-top: 12px;
-    flex-wrap: wrap; row-gap: 8px;
-  }
-  .seg {
-    flex: 1 1 90px; display: flex; align-items: center; gap: 7px;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 10.5px; letter-spacing: 0.12em; color: var(--ink-2);
-  }
-  .seg::before {
-    content: ""; width: 9px; height: 9px;
-    border: 1.5px solid var(--ink-2); background: transparent;
-  }
-  .seg.on { color: var(--ink); font-weight: 700; }
-  .seg.on::before { background: var(--ink); border-color: var(--ink); }
-
-  /* ---- two columns: activity + nameplate ---- */
-  .cols { display: grid; grid-template-columns: 1fr 300px; gap: 28px; }
-  @media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
   h2 {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--ink-2); font-weight: 600;
-    border-bottom: 1px solid var(--ink); padding-bottom: 6px; margin-bottom: 4px;
+    font-size: 12px; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 10px;
   }
-  .log { list-style: none; }
-  .log li {
-    display: flex; gap: 12px; align-items: baseline;
-    padding: 5.5px 0; border-bottom: 1px solid var(--hairline);
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 12.5px;
-  }
-  .log .t { color: var(--ink-2); flex: 0 0 60px; }
-  .log .k { flex: 0 0 66px; letter-spacing: 0.08em; text-transform: uppercase;
-            font-size: 10px; color: var(--ink-2); padding-top: 2px; }
-  .log .empty, .jobs-empty { color: var(--ink-2); font-size: 13px; padding: 8px 0;
-    font-family: system-ui, sans-serif; }
-
-  .plate { border: 1px solid var(--ink); padding: 4px 14px 10px; align-self: start; }
-  .plate h2 { border-bottom: 1px solid var(--hairline); margin: 8px -14px 2px;
-              padding: 0 14px 6px; }
-  .plate dl { display: grid; grid-template-columns: auto 1fr; column-gap: 14px; }
-  .plate dt {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
-    color: var(--ink-2); padding: 6px 0; align-self: baseline;
-  }
-  .plate dd {
-    text-align: right; font-size: 13px; padding: 5px 0;
-    font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
-  }
-  .plate dd .st { font-weight: 600; }
-  .plate dd .st.good { color: var(--good); }
-  .plate dd .st.crit { color: var(--crit); }
-
-  /* ---- jobs ---- */
-  .jobs { margin-top: 30px; }
-  table { width: 100%; border-collapse: collapse; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
   th {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
-    color: var(--ink-2); font-weight: 600; text-align: left;
-    padding: 8px 12px 6px 0; border-bottom: 1px solid var(--ink);
+    text-align: left; font-weight: 600; color: var(--muted);
+    font-size: 11.5px; letter-spacing: 0.04em; text-transform: uppercase;
+    padding: 6px 10px 6px 0; border-bottom: 1px solid var(--hairline);
   }
   td {
-    padding: 9px 12px 9px 0; border-bottom: 1px solid var(--hairline);
-    font-size: 13px; vertical-align: middle;
+    padding: 7px 10px 7px 0; border-bottom: 1px solid var(--hairline);
+    color: var(--ink);
   }
-  td.num, td.mono-cell, .mono-cell {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-variant-numeric: tabular-nums; font-size: 12.5px;
+  td.num, td.mono { font-variant-numeric: tabular-nums; }
+  td.mono { color: var(--ink-2); }
+  tr:last-child td { border-bottom: none; }
+  .events { list-style: none; font-size: 13.5px; }
+  .events li {
+    display: flex; gap: 10px; padding: 6px 0;
+    border-bottom: 1px solid var(--hairline); align-items: baseline;
   }
-  .code39 { display: inline-flex; align-items: center; gap: 10px; }
-  .bars { display: inline-flex; height: 18px; }
-  .bars i { display: inline-block; height: 100%; }
-  .bars i.b { background: var(--ink); }
+  .events li:last-child { border-bottom: none; }
+  .evt-time { flex: 0 0 62px; font-size: 12.5px;
+              font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  .evt-kind {
+    flex: 0 0 72px; font-size: 11px; font-weight: 600;
+    letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted);
+  }
+  .empty { color: var(--muted); font-size: 13px; padding: 6px 0; }
   .del {
-    font-family: ui-monospace, monospace; font-size: 11px;
-    background: none; border: 1px solid var(--hairline); color: var(--ink-2);
-    padding: 2px 8px; cursor: pointer; letter-spacing: 0.06em;
+    font-size: 12px; background: none; border: 1px solid var(--border);
+    color: var(--ink-2); padding: 3px 10px; border-radius: 6px; cursor: pointer;
   }
-  .del:hover { border-color: var(--crit); color: var(--crit); }
-  .keyrow { display: none; gap: 8px; margin-top: 10px; }
+  .del:hover { border-color: var(--critical); color: var(--critical); }
+  .keyrow { display: none; gap: 8px; margin-top: 8px; }
   .keyrow input {
-    flex: 1; padding: 6px 10px; font-size: 13px;
-    border: 1px solid var(--hairline); background: var(--paper); color: var(--ink);
-    font-family: ui-monospace, monospace;
+    flex: 1; padding: 6px 10px; font-size: 13px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--plane); color: var(--ink);
   }
   .keyrow button {
-    padding: 6px 14px; font-size: 12px; cursor: pointer;
-    border: 1px solid var(--ink); background: var(--ink); color: var(--paper);
-    font-family: ui-monospace, monospace; letter-spacing: 0.08em;
+    padding: 6px 14px; font-size: 13px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface); color: var(--ink);
   }
-  footer {
-    margin-top: 36px; padding-top: 10px; border-top: 1px solid var(--hairline);
-    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px;
+  footer { font-size: 12px; color: var(--muted); text-align: center; padding: 8px; }
+  button:focus-visible, input:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 1px;
   }
-  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 </style>
 </head>
 <body>
 <header>
-  <div class="lockup">OPEN <em>GRAPHTEC</em> SERVER</div>
-  <div class="machine">
-    <div class="model mono" id="machine-model">—</div>
-    <div class="micro"><span class="heartbeat" id="hb"></span><span id="link-text">connecting</span></div>
-  </div>
+  <div class="wordmark">Open <span>Graphtec</span> Server</div>
+  <div class="conn"><span class="dot" id="conn-dot" style="background:var(--muted)"></span><span id="conn-text">connecting…</span></div>
 </header>
 
-<div class="board">
-  <span class="rm tl"></span><span class="rm tr"></span>
-  <span class="rm bl"></span><span class="rm br"></span>
-  <div class="state-word" id="state-word">—</div>
-  <div class="state-sub" id="state-sub">Waiting for first status report.</div>
-  <div class="track" id="track"></div>
-</div>
+<div class="tiles" id="tiles"></div>
 
-<div class="cols">
-  <section>
-    <h2>Activity</h2>
-    <ul class="log" id="log"><li class="empty">Nothing yet — events appear as the cutter works.</li></ul>
-  </section>
-  <aside class="plate">
-    <h2>Nameplate</h2>
-    <dl id="plate"></dl>
-  </aside>
-</div>
+<section>
+  <h2>Recent activity</h2>
+  <ul class="events" id="events"><li class="empty">No events yet.</li></ul>
+</section>
 
-<section class="jobs">
-  <h2>Job library</h2>
-  <div id="jobs-wrap"><div class="jobs-empty">Loading…</div></div>
+<section>
+  <h2>Cut jobs</h2>
+  <div id="jobs-wrap"><div class="empty">Loading…</div></div>
   <div class="keyrow" id="keyrow">
-    <input id="key-input" type="password" placeholder="API key" aria-label="API key">
-    <button id="key-save">UNLOCK</button>
+    <input id="key-input" type="password" placeholder="API key required" aria-label="API key">
+    <button id="key-save">Save</button>
   </div>
 </section>
 
-<footer class="micro">
-  <span id="foot-id">open graphtec server</span>
-  <span id="foot-host"></span>
-</footer>
+<footer>Open Graphtec Server · <span id="foot-note">—</span></footer>
 
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s).replace(/[<>&"]/g, "");
+const esc = (s) => String(s ?? "").replace(/[<>&"]/g, "");
 
-/* The Data Link cycle, in machine order. 6/7/-999 override the word. */
-const CYCLE = [
-  [0, "IDLE"], [1, "SCAN"], [2, "MATCH"], [3, "SELECT"], [4, "SEND"], [5, "CUT"],
-];
-const STATE_WORDS = {
-  "-999": ["NO LINK", "crit"], "0": ["IDLE", ""], "1": ["SCANNING", ""],
-  "2": ["MATCHING", ""], "3": ["SELECTING", ""], "4": ["SENDING", ""],
-  "5": ["CUTTING", "good"], "6": ["OPERATOR", "warn"], "7": ["ERROR", "crit"],
+// Status color + label pairs (color never carries meaning alone).
+const DLS_COLORS = {
+  "-999": "var(--critical)", "0": "var(--muted)", "1": "var(--accent)",
+  "2": "var(--accent)", "3": "var(--accent)", "4": "var(--accent)",
+  "5": "var(--good)", "6": "var(--warning)", "7": "var(--critical)",
 };
 
-/* CODE39 patterns — the bars in the job table are the real scan data. */
-const C39 = {
-  "0":"nnnwwnwnn","1":"wnnwnnnnw","2":"nnwwnnnnw","3":"wnwwnnnnn","4":"nnnwwnnnw",
-  "5":"wnnwwnnnn","6":"nnwwwnnnn","7":"nnnwnnwnw","8":"wnnwnnwnn","9":"nnwwnnwnn",
-  "A":"wnnnnwnnw","B":"nnwnnwnnw","C":"wnwnnwnnn","D":"nnnnwwnnw","E":"wnnnwwnnn",
-  "F":"nnwnwwnnn","G":"nnnnnwwnw","H":"wnnnnwwnn","I":"nnwnnwwnn","J":"nnnnwwwnn",
-  "K":"wnnnnnnww","L":"nnwnnnnww","M":"wnwnnnnwn","N":"nnnnwnnww","O":"wnnnwnnwn",
-  "P":"nnwnwnnwn","Q":"nnnnnnwww","R":"wnnnnnwwn","S":"nnwnnnwwn","T":"nnnnwnwwn",
-  "U":"wwnnnnnnw","V":"nwwnnnnnw","W":"wwwnnnnnn","X":"nwnnwnnnw","Y":"wwnnwnnnn",
-  "Z":"nwwnwnnnn","*":"nwnnwnwnn",
-};
-function barcodeHTML(text) {
-  let html = "";
-  for (const [i, ch] of [...("*" + text + "*")].entries()) {
-    if (i) html += '<i style="width:1px"></i>';
-    const pattern = C39[ch] || C39["*"];
-    for (let p = 0; p < 9; p++) {
-      const w = pattern[p] === "w" ? "2.5px" : "1px";
-      html += `<i class="${p % 2 ? "" : "b"}" style="width:${w}"></i>`;
-    }
-  }
-  return `<span class="code39"><span class="bars" aria-hidden="true">${html}</span><span class="mono-cell">${esc(text)}</span></span>`;
-}
-
-function fmtT(iso) {
+function fmtTime(iso) {
   try { return new Date(iso).toLocaleTimeString([], {hour12: false}); }
   catch { return iso; }
 }
 
-function renderTrack(code, running) {
-  $("track").innerHTML = CYCLE.map(([value, label]) =>
-    `<span class="seg${running && value === code ? " on" : ""}">${label}</span>`
-  ).join("");
+function cutterTile(c) {
+  const color = c.is_running
+    ? (DLS_COLORS[String(c.current_status)] || "var(--muted)")
+    : "var(--muted)";
+  const state = c.is_running
+    ? (c.current_status_label || c.current_status) : "Worker stopped";
+  const sub = c.last_error
+    ? `<div class="sub err">⚠ ${esc(c.last_error)}</div>`
+    : `<div class="sub">${c.standby_mode
+        ? "Standby — waiting for a scan cycle" : "Active in scan cycle"}</div>`;
+  return `<div class="tile">
+    <div class="label">Cutter · ${esc(c.cutter_name)}</div>
+    <div class="value">${esc(c.cutter_model || "Not identified")}</div>
+    <div class="sub">${esc(c.cutter_host)}:${esc(c.cutter_port)}` +
+    (c.cutter_step_size_mm ? ` · step ${esc(c.cutter_step_size_mm)} mm` : "") +
+    `</div>
+    <div class="sub status-line" style="margin-top:8px">
+      <span class="dot" style="background:${color}"></span>
+      <span>${esc(state)}</span>
+    </div>
+    ${sub}
+  </div>`;
 }
 
 async function pollHealth() {
-  const hb = $("hb");
   let data;
   try {
     data = await (await fetch("/health", {cache: "no-store"})).json();
   } catch {
-    hb.className = "heartbeat bad";
-    $("link-text").textContent = "server unreachable";
-    $("state-word").textContent = "OFFLINE";
-    $("state-word").className = "state-word crit";
-    $("state-sub").textContent = "The server is not answering. Check that it is running.";
-    renderTrack(-1, false);
+    $("conn-dot").style.background = "var(--critical)";
+    $("conn-text").textContent = "server unreachable";
     return;
   }
-  hb.className = "heartbeat ok pulse";
-  setTimeout(() => hb.classList.remove("pulse"), 450);
-  $("link-text").textContent = "server online";
+  $("conn-dot").style.background = "var(--good)";
+  $("conn-text").textContent = "server online";
 
-  const dls = data.dls || {}, ing = data.ingest || {};
-  $("machine-model").textContent = dls.cutter_model || "cutter not identified";
+  const cutters = data.cutters || [];
+  const ing = data.ingest || {};
+  $("tiles").innerHTML =
+    cutters.map(cutterTile).join("") +
+    `<div class="tile">
+      <div class="label">Hot Folder</div>
+      <div class="value status-line">
+        <span class="dot" style="background:${ing.is_running ? "var(--good)" : "var(--muted)"}"></span>
+        <span>${ing.is_running ? "Watching" : "Stopped"}</span>
+      </div>
+      <div class="sub">${ing.processed_count ?? 0} processed · ${ing.error_count ?? 0} errors</div>
+      ${ing.last_processed_file ? `<div class="sub">last: ${esc(ing.last_processed_file)}</div>` : ""}
+    </div>`;
 
-  const code = dls.current_status;
-  let word, tone, sub;
-  if (!dls.is_running) {
-    word = "OFFLINE"; tone = "";
-    sub = "Data Link is switched off. Start it to serve barcode scans.";
-  } else {
-    [word, tone] = STATE_WORDS[String(code)] || [`STATE ${code}`, ""];
-    if (dls.last_error) sub = "";
-    else if (code === 0 && dls.standby_mode)
-      sub = "Cutter idle. The next barcode scan starts a cycle.";
-    else if (code === 0) sub = "Cutter idle.";
-    else if (code === 5) sub = "Blade down — job in progress.";
-    else if (code === 6) sub = "Waiting for the operator at the cutter panel.";
-    else sub = "Data Link cycle in progress.";
-  }
-  $("state-word").textContent = word;
-  $("state-word").className = "state-word " + tone;
-  $("state-sub").innerHTML = dls.last_error
-    ? `<strong>&#9888; ${esc(dls.last_error)}</strong>` : esc(sub);
-  renderTrack(code, dls.is_running);
-
-  const events = (dls.recent_events || []).slice().reverse().slice(0, 14);
-  $("log").innerHTML = events.length
-    ? events.map((e) =>
-        `<li><span class="t">${fmtT(e.time)}</span><span class="k">${esc(e.kind)}</span><span>${esc(e.message)}</span></li>`
-      ).join("")
-    : '<li class="empty">Nothing yet — events appear as the cutter works.</li>';
-
-  const stat = (ok, yes, no) =>
-    `<span class="st ${ok ? "good" : "crit"}">${ok ? yes : no}</span>`;
-  $("plate").innerHTML = `
-    <dt>Cutter</dt><dd class="mono-cell">${esc(dls.cutter_host)}:${esc(dls.cutter_port)}</dd>
-    <dt>Step size</dt><dd>${dls.cutter_step_size_mm ? esc(dls.cutter_step_size_mm) + " mm" : "—"}</dd>
-    <dt>Data link</dt><dd>${stat(dls.is_running, "RUNNING", "STOPPED")}</dd>
-    <dt>Hot folder</dt><dd>${stat(ing.is_running, "WATCHING", "STOPPED")}</dd>
-    <dt>Processed</dt><dd>${ing.processed_count ?? 0}</dd>
-    <dt>Errors</dt><dd>${ing.error_count ?? 0}</dd>
-    <dt>Last file</dt><dd>${esc(ing.last_processed_file || "—")}</dd>`;
+  const showCutterTag = cutters.length > 1;
+  const events = cutters
+    .flatMap((c) => (c.recent_events || []).map(
+      (e) => ({...e, cutter: c.cutter_name})))
+    .sort((a, b) => a.time < b.time ? 1 : -1)
+    .slice(0, 12);
+  $("events").innerHTML = events.length
+    ? events.map((e) => `<li>
+        <span class="evt-time">${fmtTime(e.time)}</span>
+        <span class="evt-kind">${showCutterTag ? esc(e.cutter) : esc(e.kind)}</span>
+        <span>${esc(e.message)}</span></li>`).join("")
+    : '<li class="empty">No events yet.</li>';
 }
 
 function authHeaders() {
@@ -364,33 +239,34 @@ async function pollJobs() {
   } catch { return; }
   if (res.status === 401) {
     $("jobs-wrap").innerHTML =
-      '<div class="jobs-empty">This server requires an API key to list jobs.</div>';
+      '<div class="empty">An API key is configured on this server.</div>';
     $("keyrow").style.display = "flex";
     return;
   }
   $("keyrow").style.display = "none";
   const jobs = await res.json();
   if (!jobs.length) {
-    $("jobs-wrap").innerHTML =
-      '<div class="jobs-empty">No jobs loaded. Drop a PDF in the hot folder or POST to /jobs/import-pdf.</div>';
+    $("jobs-wrap").innerHTML = '<div class="empty">No jobs loaded.</div>';
     return;
   }
+  const rows = jobs.map((j) => `<tr>
+    <td class="num">${j.id}</td>
+    <td>${esc(j.name)}</td>
+    <td class="mono">${esc(j.barcode_link_info)}</td>
+    <td>${j.command_type === 0 ? "GP-GL" : "HP-GL"}</td>
+    <td class="num">${(j.command_length / 1024).toFixed(1)} KB</td>
+    <td class="mono">${new Date(j.created_at).toLocaleString([], {hour12: false})}</td>
+    <td><button class="del" data-id="${j.id}" data-name="${esc(j.name)}">Delete</button></td>
+  </tr>`).join("");
   $("jobs-wrap").innerHTML = `<table>
-    <thead><tr><th>ID</th><th>Barcode</th><th>Job</th><th>Size</th><th>Loaded</th><th></th></tr></thead>
-    <tbody>${jobs.map((j) => `<tr>
-      <td class="num">${j.id}</td>
-      <td>${barcodeHTML(j.barcode_link_info)}</td>
-      <td>${esc(j.name)}</td>
-      <td class="num">${(j.command_length / 1024).toFixed(1)} KB</td>
-      <td class="mono-cell">${new Date(j.created_at).toLocaleString([], {hour12: false})}</td>
-      <td><button class="del" data-id="${j.id}" data-name="${esc(j.name)}">DELETE</button></td>
-    </tr>`).join("")}</tbody></table>`;
+    <thead><tr><th>ID</th><th>Name</th><th>Barcode</th><th>Type</th>
+    <th>Size</th><th>Created</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 document.addEventListener("click", async (evt) => {
   const btn = evt.target.closest(".del");
   if (!btn) return;
-  if (!confirm(`Delete job "${btn.dataset.name}"? The cutter will no longer be offered it.`)) return;
+  if (!confirm(`Delete job "${btn.dataset.name}"? Cutters will no longer be offered it.`)) return;
   const res = await fetch(`/jobs/${btn.dataset.id}`, {
     method: "DELETE", headers: authHeaders(),
   });
@@ -404,9 +280,8 @@ $("key-save").addEventListener("click", () => {
 });
 
 fetch("/version").then((r) => r.json()).then((v) => {
-  $("foot-id").textContent = `${v.name.toLowerCase()} · v${v.version}`;
-}).catch(() => {});
-$("foot-host").textContent = window.location.host;
+  $("foot-note").textContent = `v${v.version} · ${window.location.host}`;
+}).catch(() => { $("foot-note").textContent = window.location.host; });
 
 pollHealth(); pollJobs();
 setInterval(pollHealth, 2000);

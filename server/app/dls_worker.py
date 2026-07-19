@@ -9,7 +9,7 @@ import threading
 import time
 from typing import Optional
 
-from .config import Settings
+from .config import CutterConfig, Settings
 from .models import CutJobMeta
 from .protocol import (
     DLS_STATUS_LABELS,
@@ -52,12 +52,19 @@ class _ProcessLock:
 
 
 class DataLinkServerWorker:
-    def __init__(self, *, settings: Settings, store: JobStore) -> None:
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        store: JobStore,
+        cutter: Optional[CutterConfig] = None,
+    ) -> None:
         self._settings = settings
         self._store = store
+        self._cutter = cutter or settings.cutters[0]
         self._client = DataLinkClient(
-            host=settings.cutter_host,
-            port=settings.cutter_port,
+            host=self._cutter.host,
+            port=self._cutter.port,
             timeout_seconds=settings.dls_timeout_seconds,
             retry_total_ms=settings.send_retry_total_ms,
             retry_interval_ms=settings.send_retry_interval_ms,
@@ -69,7 +76,13 @@ class DataLinkServerWorker:
         # Guards the runtime state fields below. RLock so helpers can be
         # called both with and without the lock already held.
         self._runtime_lock = threading.RLock()
-        self._process_lock = _ProcessLock(settings.lock_file_path)
+        # One lock file per cutter: N workers in one process are fine, but
+        # two processes must not both talk to the same machine.
+        self._process_lock = _ProcessLock(
+            settings.lock_file_path.with_name(
+                f"dls-{self._cutter.name}.lock"
+            )
+        )
 
         self._is_running = False
         self._standby_mode = True
@@ -103,7 +116,7 @@ class DataLinkServerWorker:
             self._stop_event.clear()
             self._thread = threading.Thread(
                 target=self._run,
-                name="graphtec-dls-worker",
+                name=f"graphtec-dls-{self._cutter.name}",
                 daemon=True,
             )
             self._thread.start()
@@ -126,14 +139,15 @@ class DataLinkServerWorker:
     def get_status(self) -> dict[str, object]:
         with self._runtime_lock:
             return {
+                "cutter_name": self._cutter.name,
                 "is_running": self._is_running,
                 "standby_mode": self._standby_mode,
                 "current_status": self._current_status,
                 "previous_status": self._previous_status,
                 "last_error": self._last_error,
                 "loaded_job_count": len(self._latest_job_metas),
-                "cutter_host": self._settings.cutter_host,
-                "cutter_port": self._settings.cutter_port,
+                "cutter_host": self._cutter.host,
+                "cutter_port": self._cutter.port,
                 "cutter_model": self._cutter_model,
                 "cutter_step_size_mm": self._cutter_step_size_mm,
                 "current_status_label": DLS_STATUS_LABELS.get(
@@ -170,9 +184,10 @@ class DataLinkServerWorker:
             self._latest_job_metas = []
 
         logger.info(
-            "DLS worker started (host=%s port=%s).",
-            self._settings.cutter_host,
-            self._settings.cutter_port,
+            "DLS worker '%s' started (host=%s port=%s).",
+            self._cutter.name,
+            self._cutter.host,
+            self._cutter.port,
         )
 
         self._read_cutter_configuration()

@@ -127,8 +127,38 @@ _configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 store = JobStore(str(settings.database_path))
-dls_worker = DataLinkServerWorker(settings=settings, store=store)
+# One Data Link worker per configured cutter; they share the job store,
+# so any cutter that scans a barcode is offered the matching jobs.
+dls_workers: dict[str, DataLinkServerWorker] = {
+    cutter.name: DataLinkServerWorker(
+        settings=settings, store=store, cutter=cutter
+    )
+    for cutter in settings.cutters
+}
 ingest_worker = HeadlessIngestWorker(settings=settings, store=store)
+
+
+def _resolve_worker(cutter: Optional[str]) -> DataLinkServerWorker:
+    if cutter is None:
+        if len(dls_workers) == 1:
+            return next(iter(dls_workers.values()))
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Multiple cutters are configured; pass ?cutter=<name>. "
+                f"Known: {', '.join(sorted(dls_workers))}."
+            ),
+        )
+    worker = dls_workers.get(cutter)
+    if worker is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Unknown cutter {cutter!r}. "
+                f"Known: {', '.join(sorted(dls_workers))}."
+            ),
+        )
+    return worker
 
 
 async def require_api_key(request: Request) -> None:
@@ -158,18 +188,22 @@ async def lifespan(app: FastAPI):
         ingest_worker.start()
         logger.info("Headless ingest worker autostart is enabled.")
     if settings.dls_enabled:
-        dls_worker.start()
-        logger.info("DLS worker autostart is enabled.")
+        for worker in dls_workers.values():
+            worker.start()
+        logger.info(
+            "DLS autostart enabled for %d cutter(s).", len(dls_workers)
+        )
     yield
     ingest_worker.stop()
-    dls_worker.stop()
+    for worker in dls_workers.values():
+        worker.stop()
     store.close()
     logger.info("API shutdown complete.")
 
 
 app = FastAPI(
     title="Open Graphtec Server",
-    version="0.3.0",
+    version="0.4.0",
     description=(
         "Headless Graphtec Data Link service with network cut-file intake."
     ),
@@ -195,7 +229,7 @@ def health() -> dict[str, object]:
     return {
         "ok": True,
         "mode": "headless",
-        "dls": dls_worker.get_status(),
+        "cutters": [w.get_status() for w in dls_workers.values()],
         "ingest": ingest_worker.get_status(),
         "database_path": str(settings.database_path),
     }
@@ -219,14 +253,28 @@ def ingest_stop() -> dict[str, object]:
 
 
 @app.get("/dls/status", dependencies=[Depends(require_api_key)])
-def dls_status() -> dict[str, object]:
-    return dls_worker.get_status()
+def dls_status(cutter: Optional[str] = Query(default=None)) -> object:
+    if cutter is not None:
+        return _resolve_worker(cutter).get_status()
+    return [w.get_status() for w in dls_workers.values()]
 
 
 @app.get("/dls/events", dependencies=[Depends(require_api_key)])
-def dls_events() -> list[dict[str, str]]:
-    """The synthesized activity log (newest last, up to 50 entries)."""
-    return dls_worker.get_status()["recent_events"]
+def dls_events(
+    cutter: Optional[str] = Query(default=None),
+) -> list[dict[str, str]]:
+    """The synthesized activity log across cutters (oldest first)."""
+    if cutter is not None:
+        workers = [_resolve_worker(cutter)]
+    else:
+        workers = list(dls_workers.values())
+    events: list[dict[str, str]] = []
+    for worker in workers:
+        status = worker.get_status()
+        for event in status["recent_events"]:
+            events.append({**event, "cutter": status["cutter_name"]})
+    events.sort(key=lambda e: e["time"])
+    return events[-50:]
 
 
 @app.get("/version")
@@ -239,14 +287,15 @@ def version() -> dict[str, object]:
 
 
 @app.get("/cutter/info", dependencies=[Depends(require_api_key)])
-def cutter_info() -> dict[str, object]:
-    """Query the cutter directly for its identity and settings.
+def cutter_info(cutter: Optional[str] = Query(default=None)) -> dict[str, object]:
+    """Query a cutter directly for its identity and settings.
 
     Refused while a scan cycle is active: the Data Link guideline restricts
     extra traffic once a cycle has started, and the cutter accepts only one
     connection at a time.
     """
-    status = dls_worker.get_status()
+    worker = _resolve_worker(cutter)
+    status = worker.get_status()
     if status["is_running"] and status["current_status"] not in (0, -999):
         raise HTTPException(
             status_code=409,
@@ -255,9 +304,12 @@ def cutter_info() -> dict[str, object]:
                 f"({status['current_status_label']}); try again when idle."
             ),
         )
+    config = next(
+        c for c in settings.cutters if c.name == status["cutter_name"]
+    )
     client = DataLinkClient(
-        host=settings.cutter_host,
-        port=settings.cutter_port,
+        host=config.host,
+        port=config.port,
         timeout_seconds=settings.dls_timeout_seconds,
         retry_total_ms=settings.send_retry_total_ms,
         retry_interval_ms=settings.send_retry_interval_ms,
@@ -279,25 +331,38 @@ def cutter_info() -> dict[str, object]:
         "command_setting": COMMAND_SETTING_LABELS.get(
             command_code, f"unknown ({command_code})"
         ),
-        "host": settings.cutter_host,
-        "port": settings.cutter_port,
+        "cutter_name": config.name,
+        "host": config.host,
+        "port": config.port,
     }
 
 
 @app.post("/dls/start", dependencies=[Depends(require_api_key)])
-def dls_start() -> dict[str, object]:
-    started = dls_worker.start()
-    status = dls_worker.get_status()
-    status["start_accepted"] = started
-    return status
+def dls_start(cutter: Optional[str] = Query(default=None)) -> list[dict[str, object]]:
+    workers = (
+        [_resolve_worker(cutter)] if cutter else list(dls_workers.values())
+    )
+    results = []
+    for worker in workers:
+        started = worker.start()
+        status = worker.get_status()
+        status["start_accepted"] = started
+        results.append(status)
+    return results
 
 
 @app.post("/dls/stop", dependencies=[Depends(require_api_key)])
-def dls_stop() -> dict[str, object]:
-    stopped = dls_worker.stop()
-    status = dls_worker.get_status()
-    status["stop_completed"] = stopped
-    return status
+def dls_stop(cutter: Optional[str] = Query(default=None)) -> list[dict[str, object]]:
+    workers = (
+        [_resolve_worker(cutter)] if cutter else list(dls_workers.values())
+    )
+    results = []
+    for worker in workers:
+        stopped = worker.stop()
+        status = worker.get_status()
+        status["stop_completed"] = stopped
+        results.append(status)
+    return results
 
 
 @app.post(

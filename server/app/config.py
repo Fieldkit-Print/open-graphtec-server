@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import re
 
 
 def _bool_from_env(name: str, default: bool) -> bool:
@@ -14,6 +15,43 @@ def _bool_from_env(name: str, default: bool) -> bool:
 
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+@dataclass(frozen=True)
+class CutterConfig:
+    """One Graphtec cutter on the network."""
+
+    name: str
+    host: str
+    port: int = 9100
+
+
+def _parse_cutters(raw: str) -> tuple[CutterConfig, ...]:
+    """Parse CUTTERS="name=host[:port],name2=host2[:port]"."""
+    cutters: list[CutterConfig] = []
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if "=" not in entry:
+            raise ValueError(
+                f"CUTTERS entry {entry!r} must look like name=host[:port]."
+            )
+        name, _, address = entry.partition("=")
+        name = name.strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name):
+            raise ValueError(
+                f"Cutter name {name!r} must be alphanumeric/dash/underscore."
+            )
+        host, _, port_text = address.strip().partition(":")
+        port = int(port_text) if port_text else 9100
+        cutters.append(CutterConfig(name=name, host=host, port=port))
+    names = [c.name for c in cutters]
+    if len(names) != len(set(names)):
+        raise ValueError("Cutter names in CUTTERS must be unique.")
+    if not cutters:
+        raise ValueError("CUTTERS was set but contained no cutters.")
+    return tuple(cutters)
 
 
 @dataclass(frozen=True)
@@ -33,8 +71,7 @@ class Settings:
     dls_poll_interval_seconds: float
     dls_timeout_seconds: float
 
-    cutter_host: str
-    cutter_port: int
+    cutters: tuple[CutterConfig, ...]
     send_retry_total_ms: int
     send_retry_interval_ms: int
 
@@ -93,8 +130,19 @@ class Settings:
             dls_timeout_seconds=_clamp(
                 float(os.getenv("DLS_TIMEOUT_SECONDS", "5.0")), 3.0, 10.0
             ),
-            cutter_host=os.getenv("CUTTER_HOST", "127.0.0.1"),
-            cutter_port=int(os.getenv("CUTTER_PORT", "9100")),
+            # CUTTERS="left=192.168.1.104:9100,right=192.168.1.105" wins;
+            # otherwise fall back to the single-cutter CUTTER_HOST/PORT.
+            cutters=(
+                _parse_cutters(os.environ["CUTTERS"])
+                if os.getenv("CUTTERS", "").strip()
+                else (
+                    CutterConfig(
+                        name=os.getenv("CUTTER_NAME", "cutter"),
+                        host=os.getenv("CUTTER_HOST", "127.0.0.1"),
+                        port=int(os.getenv("CUTTER_PORT", "9100")),
+                    ),
+                )
+            ),
             send_retry_total_ms=int(os.getenv("SEND_RETRY_TOTAL_MS", "3000")),
             send_retry_interval_ms=int(
                 os.getenv("SEND_RETRY_INTERVAL_MS", "50")

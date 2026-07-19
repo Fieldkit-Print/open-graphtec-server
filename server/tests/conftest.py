@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.config import Settings
+from app.config import CutterConfig, Settings
 
 
 def build_pdf(
@@ -59,6 +59,9 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
     for folder in (data_dir, inbox, processed, errors):
         folder.mkdir(parents=True, exist_ok=True)
 
+    # Ergonomic single-cutter overrides; pass cutters=... directly for more.
+    cutter_host = overrides.pop("cutter_host", "127.0.0.1")
+    cutter_port = overrides.pop("cutter_port", 9)
     values = dict(
         app_data_dir=data_dir,
         database_path=data_dir / "jobs.db",
@@ -72,8 +75,7 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         dls_enabled=False,
         dls_poll_interval_seconds=0.05,
         dls_timeout_seconds=1.0,
-        cutter_host="127.0.0.1",
-        cutter_port=9,
+        cutters=(CutterConfig(name="test", host=cutter_host, port=cutter_port),),
         send_retry_total_ms=200,
         send_retry_interval_ms=50,
         ingest_enabled=False,

@@ -2,6 +2,7 @@ import time
 
 import pytest
 
+from app.config import CutterConfig
 from app.dls_worker import DataLinkServerWorker
 from app.storage import JobStore
 from tests.conftest import make_settings
@@ -272,3 +273,68 @@ def test_worker_survives_store_exceptions(tmp_path, store) -> None:
             assert wait_until(lambda: cutter.d1_count > before)
         finally:
             worker.stop()
+
+
+def test_two_cutters_share_one_job_store(tmp_path, store) -> None:
+    """Two workers, two fake cutters, one store: each machine gets the
+    job matching the barcode IT scanned."""
+    store.create_job(
+        name="LEFT-JOB", barcode_link_info="A00000LEFT"[:9],
+        command_type=0, regmark_fx=0, regmark_fy=0, regmark_rx=0,
+        regmark_ry=0, command_sequence=b"J1\x03M1,1\x03M0,0\x03",
+    )
+    store.create_job(
+        name="RIGHT-JOB", barcode_link_info="A0000RIGHT"[:9],
+        command_type=0, regmark_fx=0, regmark_fy=0, regmark_rx=0,
+        regmark_ry=0, command_sequence=b"J1\x03M2,2\x03M0,0\x03",
+    )
+
+    with FakeCutter() as left, FakeCutter() as right:
+        left.barcode = "A00000LEF"
+        right.barcode = "A0000RIGH"
+        left.status = right.status = 0
+        settings = make_settings(
+            tmp_path,
+            cutters=(
+                CutterConfig("left", "127.0.0.1", left.port),
+                CutterConfig("right", "127.0.0.1", right.port),
+            ),
+        )
+        workers = [
+            DataLinkServerWorker(
+                settings=settings, store=store, cutter=cutter
+            )
+            for cutter in settings.cutters
+        ]
+        for w in workers:
+            assert w.start()
+        try:
+            names = [w.get_status()["cutter_name"] for w in workers]
+            assert names == ["left", "right"]
+
+            for cutter in (left, right):
+                cutter.status = 1
+            assert wait_until(
+                lambda: all(
+                    not w.get_status()["standby_mode"] for w in workers
+                )
+            )
+            for cutter in (left, right):
+                cutter.selected_reply = "0"
+                cutter.status = 2
+            assert wait_until(
+                lambda: left.received_job_lists and right.received_job_lists
+            )
+            assert left.received_job_lists[0] == ["LEFT-JOB"]
+            assert right.received_job_lists[0] == ["RIGHT-JOB"]
+
+            for cutter in (left, right):
+                cutter.status = 4
+            assert wait_until(
+                lambda: left.received_sequences and right.received_sequences
+            )
+            assert b"M1,1" in left.received_sequences[0]
+            assert b"M2,2" in right.received_sequences[0]
+        finally:
+            for w in workers:
+                w.stop()
