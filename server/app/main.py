@@ -20,7 +20,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from .config import Settings
 from .converters.pdf_to_gpgl import convert_pdf_to_gpgl
@@ -32,7 +32,13 @@ from .models import (
     JobDetails,
     JobSummary,
 )
-from .protocol import ETX, validate_job_name
+from .protocol import (
+    COMMAND_SETTING_LABELS,
+    ETX,
+    STEP_SIZE_CODE_TO_MM,
+    DataLinkClient,
+    validate_job_name,
+)
 from .storage import JobStore
 
 
@@ -217,6 +223,67 @@ def dls_status() -> dict[str, object]:
     return dls_worker.get_status()
 
 
+@app.get("/dls/events", dependencies=[Depends(require_api_key)])
+def dls_events() -> list[dict[str, str]]:
+    """The synthesized activity log (newest last, up to 50 entries)."""
+    return dls_worker.get_status()["recent_events"]
+
+
+@app.get("/version")
+def version() -> dict[str, object]:
+    return {
+        "name": app.title,
+        "version": app.version,
+        "server_time_utc": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/cutter/info", dependencies=[Depends(require_api_key)])
+def cutter_info() -> dict[str, object]:
+    """Query the cutter directly for its identity and settings.
+
+    Refused while a scan cycle is active: the Data Link guideline restricts
+    extra traffic once a cycle has started, and the cutter accepts only one
+    connection at a time.
+    """
+    status = dls_worker.get_status()
+    if status["is_running"] and status["current_status"] not in (0, -999):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cutter is in an active Data Link cycle "
+                f"({status['current_status_label']}); try again when idle."
+            ),
+        )
+    client = DataLinkClient(
+        host=settings.cutter_host,
+        port=settings.cutter_port,
+        timeout_seconds=settings.dls_timeout_seconds,
+        retry_total_ms=settings.send_retry_total_ms,
+        retry_interval_ms=settings.send_retry_interval_ms,
+    )
+    try:
+        model = client.get_model_info()
+        step_code = client.get_step_size_code()
+        command_code = client.get_command_setting_code()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"Cutter did not respond: {exc}"
+        ) from exc
+    step_mm = STEP_SIZE_CODE_TO_MM.get(step_code)
+    return {
+        "model": model,
+        "step_size_mm": step_mm,
+        "steps_per_mm": round(1.0 / step_mm) if step_mm else None,
+        "configured_steps_per_mm": settings.gpgl_steps_per_mm,
+        "command_setting": COMMAND_SETTING_LABELS.get(
+            command_code, f"unknown ({command_code})"
+        ),
+        "host": settings.cutter_host,
+        "port": settings.cutter_port,
+    }
+
+
 @app.post("/dls/start", dependencies=[Depends(require_api_key)])
 def dls_start() -> dict[str, object]:
     started = dls_worker.start()
@@ -376,3 +443,26 @@ def get_job(job_id: int) -> JobDetails:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
     return _job_to_details(job)
+
+
+@app.get("/jobs/{job_id}/gpgl", dependencies=[Depends(require_api_key)])
+def download_job_gpgl(job_id: int) -> Response:
+    """Download the job's stored command sequence, byte-exact."""
+    job = store.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return Response(
+        content=job.command_sequence,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="job-{job.id}.gpgl"'
+        },
+    )
+
+
+@app.delete("/jobs/{job_id}", dependencies=[Depends(require_api_key)])
+def delete_job(job_id: int) -> dict[str, object]:
+    if not store.delete_job(job_id):
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return {"deleted": job_id}

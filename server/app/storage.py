@@ -90,6 +90,13 @@ class JobStore:
             )
             return int(cursor.lastrowid)
 
+    def delete_job(self, job_id: int) -> bool:
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM jobs WHERE id = ?", (job_id,)
+            )
+            return cursor.rowcount > 0
+
     def get_job(self, job_id: int) -> Optional[CutJob]:
         with self._lock:
             row = self._conn.execute(

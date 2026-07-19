@@ -18,6 +18,8 @@ def api(tmp_path_factory):
     os.environ["APP_DATA_DIR"] = str(data_dir)
     os.environ["DLS_ENABLED"] = "false"
     os.environ["INGEST_ENABLED"] = "false"
+    os.environ["CUTTER_PORT"] = "9"       # nothing listens: /cutter/info -> 503
+    os.environ["SEND_RETRY_TOTAL_MS"] = "100"
 
     import app.main as main_module
     main = importlib.reload(main_module)
@@ -158,6 +160,43 @@ def test_import_pdf_enforces_size_limit(client, main) -> None:
         data={"name": "pdf-job", "barcode_link_info": BARCODE},
     )
     assert response.status_code == 413
+
+
+def test_version_is_open(client) -> None:
+    response = client.get("/version")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "Open Graphtec Server"
+    assert "server_time_utc" in body
+
+
+def test_job_gpgl_download_and_delete(client) -> None:
+    created = client.post(
+        "/jobs/import-json",
+        json=import_json_payload(command_sequence="J1\x03M0,0\x03"),
+    ).json()
+    job_id = created["job_id"]
+
+    raw = client.get(f"/jobs/{job_id}/gpgl")
+    assert raw.status_code == 200
+    assert raw.content.startswith(b"J1\x03M0,0\x03")
+    assert "attachment" in raw.headers["content-disposition"]
+
+    assert client.delete(f"/jobs/{job_id}").status_code == 200
+    assert client.get(f"/jobs/{job_id}").status_code == 404
+    assert client.delete(f"/jobs/{job_id}").status_code == 404
+
+
+def test_dls_events_endpoint(client) -> None:
+    response = client.get("/dls/events")
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+def test_cutter_info_reports_unreachable_cutter(client) -> None:
+    response = client.get("/cutter/info")
+    assert response.status_code == 503
+    assert "did not respond" in response.json()["detail"]
 
 
 def test_ingest_endpoints_exist(client) -> None:

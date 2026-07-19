@@ -16,6 +16,8 @@ MAX_JOB_NAME_LENGTH = 25
 # ESC.C31;16: reply codes -> step size in mm (CE8000/FC9000 spec 3.3.14).
 STEP_SIZE_CODE_TO_MM = {1: 0.100, 2: 0.050, 3: 0.025, 4: 0.010}
 
+COMMAND_SETTING_LABELS = {0: "GP-GL", 1: "HP-GL", 2: "AUTO"}
+
 # Human labels for the ESC.d1 Data Link status values (guideline Table 1).
 DLS_STATUS_LABELS = {
     -999: "Not communicating",
@@ -140,6 +142,13 @@ class DataLinkClient:
         """Read the GP-GL STEP SIZE menu setting (see STEP_SIZE_CODE_TO_MM)."""
         response = self._send_text_command_with_retry(
             f"{ESC}.C31;16:", expect_response=True
+        )
+        return parse_int_response(response)
+
+    def get_command_setting_code(self) -> Optional[int]:
+        """Read the COMMAND menu setting: 0 GP-GL, 1 HP-GL, 2 AUTO."""
+        response = self._send_text_command_with_retry(
+            f"{ESC}.C31;24:", expect_response=True
         )
         return parse_int_response(response)
 

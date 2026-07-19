@@ -32,6 +32,7 @@ class FakeCutter:
         self.status: int = 0
         self.model_info: str = "FAKE-9000, V1.00"
         self.step_size_code: int = 1  # 1=0.1mm 2=0.05 3=0.025 4=0.01
+        self.command_setting_code: int = 2  # 0 GP-GL, 1 HP-GL, 2 AUTO
         self.barcode: str = "A12345678"
         self.selected_reply: str = "0"     # reply body for ESC.d4
         self.job_list_reply: str = "0"     # reply body for ESC.d3
@@ -140,6 +141,8 @@ class FakeCutter:
         elif message.startswith(ESC + b".C31;16"):
             # Real FC9000 firmware pads numeric ESC.C replies to 5 bytes.
             self._reply(conn, f"{self.step_size_code:>5}")
+        elif message.startswith(ESC + b".C31;24"):
+            self._reply(conn, f"{self.command_setting_code:>5}")
         elif message.startswith(ESC + b".d1"):
             self.d1_count += 1
             self._reply(conn, str(self.status))
