@@ -169,7 +169,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Open Graphtec Server",
-    version="0.2.0",
+    version="0.3.0",
     description=(
         "Headless Graphtec Data Link service with network cut-file intake."
     ),
