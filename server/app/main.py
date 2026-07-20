@@ -42,6 +42,7 @@ from .protocol import (
     validate_job_name,
 )
 from .storage import JobStore
+from .webhook import WebhookNotifier
 
 
 def _configure_logging(level: str) -> None:
@@ -129,11 +130,15 @@ _configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 store = JobStore(str(settings.database_path))
+webhook_notifier = WebhookNotifier(
+    settings.webhook_url, secret=settings.webhook_secret
+)
 # One Data Link worker per configured cutter; they share the job store,
 # so any cutter that scans a barcode is offered the matching jobs.
 dls_workers: dict[str, DataLinkServerWorker] = {
     cutter.name: DataLinkServerWorker(
-        settings=settings, store=store, cutter=cutter
+        settings=settings, store=store, cutter=cutter,
+        notifier=webhook_notifier,
     )
     for cutter in settings.cutters
 }
@@ -239,6 +244,7 @@ def health() -> dict[str, object]:
         "cutters": [w.get_status() for w in dls_workers.values()],
         "ingest": ingest_worker.get_status(),
         "print_prepare": print_worker.get_status(),
+        "webhook": webhook_notifier.get_status(),
         "database_path": str(settings.database_path),
     }
 

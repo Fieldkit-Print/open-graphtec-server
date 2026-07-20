@@ -88,6 +88,8 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         gpgl_steps_per_mm=10,
         cut_spot_colors=("CutContour",),
         barcode_prefix="F",
+        webhook_url="",
+        webhook_secret="",
         print_ingest_enabled=False,
         print_inbox_dir=data_dir / "inbox" / "print",
         print_outbox_dir=data_dir / "outbox" / "print",

@@ -85,6 +85,8 @@ class Settings:
 
     cut_spot_colors: tuple[str, ...]
     barcode_prefix: str
+    webhook_url: str
+    webhook_secret: str
     print_ingest_enabled: bool
     print_inbox_dir: Path
     print_outbox_dir: Path
@@ -191,6 +193,9 @@ class Settings:
             # First char(s) of server-minted barcodes; must not start
             # with 'G' (reserved by Graphtec).
             barcode_prefix=os.getenv("BARCODE_PREFIX", "F").strip().upper(),
+            # Empty = webhooks disabled.
+            webhook_url=os.getenv("WEBHOOK_URL", "").strip(),
+            webhook_secret=os.getenv("WEBHOOK_SECRET", "").strip(),
             print_ingest_enabled=_bool_from_env("PRINT_INGEST_ENABLED", True),
             print_inbox_dir=print_inbox_dir,
             print_outbox_dir=print_outbox_dir,

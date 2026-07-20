@@ -18,6 +18,7 @@ from .protocol import (
     is_allowed_transition,
 )
 from .storage import JobStore
+from .webhook import WebhookNotifier
 
 
 logger = logging.getLogger(__name__)
@@ -58,9 +59,11 @@ class DataLinkServerWorker:
         settings: Settings,
         store: JobStore,
         cutter: Optional[CutterConfig] = None,
+        notifier: Optional[WebhookNotifier] = None,
     ) -> None:
         self._settings = settings
         self._store = store
+        self._notifier = notifier
         self._cutter = cutter or settings.cutters[0]
         self._client = DataLinkClient(
             host=self._cutter.host,
@@ -332,6 +335,12 @@ class DataLinkServerWorker:
                 f"Barcode {barcode_link_info}: offering "
                 f"{len(names)} job(s)" + (f" ({', '.join(names)})" if names else ""),
             )
+            if not metas and self._notifier:
+                self._notifier.notify(
+                    "barcode.no_match",
+                    cutter=self._cutter.name,
+                    barcode_link_info=barcode_link_info,
+                )
             response = self._client.send_job_list(names)
             if response < 0:
                 self._enter_standby(
@@ -390,6 +399,15 @@ class DataLinkServerWorker:
                 f"Sent job '{selected_job.name}' to cutter "
                 f"({len(selected_job.command_sequence)} bytes).",
             )
+            if self._notifier:
+                self._notifier.notify(
+                    "job.sent",
+                    cutter=self._cutter.name,
+                    job_id=selected_job.id,
+                    name=selected_job.name,
+                    barcode_link_info=selected_job.barcode_link_info,
+                    command_bytes=len(selected_job.command_sequence),
+                )
         except Exception as exc:  # noqa: BLE001
             self._enter_standby(f"Failed while sending selected job: {exc}")
 
