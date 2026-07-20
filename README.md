@@ -18,6 +18,8 @@ job handoff → 4-point ARMS registration → cut.
                         └─────────────────────┘             └─────────────┘
 ```
 
+**[Full documentation →](docs/README.md)**
+
 ## Why
 
 Barcode-driven cutting ("Data Link") normally requires Graphtec's desktop
@@ -128,7 +130,9 @@ Set in `.env` (see `.env.example` for the full list):
 | `MAX_UPLOAD_BYTES` | Upload / conversion size cap |
 
 On startup the server reads the cutter's model and step size and warns
-loudly if the configured scale does not match the machine.
+loudly if the configured scale does not match the machine. Set
+`WEBHOOK_URL` to receive `job.sent` / `barcode.no_match` events — see
+[docs/webhooks.md](docs/webhooks.md).
 
 ## Print preparation
 
