@@ -46,6 +46,43 @@ class JobStore:
                 ON jobs(barcode_link_info)
                 """
             )
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS counters (
+                    name TEXT PRIMARY KEY,
+                    value INTEGER NOT NULL
+                )
+                """
+            )
+
+    _BASE36 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+    def allocate_barcode(self, prefix: str = "F") -> str:
+        """Mint a unique 9-char barcode link info: prefix + base36 counter.
+
+        The prefix must not start with 'G' (reserved by Graphtec).
+        """
+        if not prefix or prefix[0] == "G":
+            raise ValueError("Barcode prefix must be set and must not start with 'G'.")
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO counters (name, value) VALUES ('barcode', 1)
+                ON CONFLICT(name) DO UPDATE SET value = value + 1
+                """
+            )
+            row = self._conn.execute(
+                "SELECT value FROM counters WHERE name = 'barcode'"
+            ).fetchone()
+        counter = int(row["value"])
+        digits = ""
+        while counter:
+            counter, rem = divmod(counter, 36)
+            digits = self._BASE36[rem] + digits
+        body_len = 9 - len(prefix)
+        if len(digits) > body_len:
+            raise RuntimeError("Barcode counter space exhausted.")
+        return prefix + digits.rjust(body_len, "0")
 
     def create_job(
         self,

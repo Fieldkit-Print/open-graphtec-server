@@ -2,3 +2,5 @@ fastapi==0.115.6
 uvicorn[standard]==0.32.1
 python-multipart==0.0.18
 pdfplumber==0.11.5
+pikepdf==10.10.0
+reportlab==5.0.0

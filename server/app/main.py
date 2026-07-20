@@ -26,6 +26,8 @@ from .config import Settings
 from .converters.pdf_to_gpgl import convert_pdf_to_gpgl
 from .dls_worker import DataLinkServerWorker
 from .ingest_worker import HeadlessIngestWorker
+from .print_prepare import prepare_print
+from .print_worker import PrintPrepareWorker
 from .models import (
     ImportJobResponse,
     ImportJsonJobRequest,
@@ -136,6 +138,7 @@ dls_workers: dict[str, DataLinkServerWorker] = {
     for cutter in settings.cutters
 }
 ingest_worker = HeadlessIngestWorker(settings=settings, store=store)
+print_worker = PrintPrepareWorker(settings=settings, store=store)
 
 
 def _resolve_worker(cutter: Optional[str]) -> DataLinkServerWorker:
@@ -187,6 +190,9 @@ async def lifespan(app: FastAPI):
     if settings.ingest_enabled:
         ingest_worker.start()
         logger.info("Headless ingest worker autostart is enabled.")
+    if settings.print_ingest_enabled:
+        print_worker.start()
+        logger.info("Print prepare worker autostart is enabled.")
     if settings.dls_enabled:
         for worker in dls_workers.values():
             worker.start()
@@ -194,6 +200,7 @@ async def lifespan(app: FastAPI):
             "DLS autostart enabled for %d cutter(s).", len(dls_workers)
         )
     yield
+    print_worker.stop()
     ingest_worker.stop()
     for worker in dls_workers.values():
         worker.stop()
@@ -231,6 +238,7 @@ def health() -> dict[str, object]:
         "mode": "headless",
         "cutters": [w.get_status() for w in dls_workers.values()],
         "ingest": ingest_worker.get_status(),
+        "print_prepare": print_worker.get_status(),
         "database_path": str(settings.database_path),
     }
 
@@ -250,6 +258,79 @@ def ingest_start() -> dict[str, object]:
 def ingest_stop() -> dict[str, object]:
     ingest_worker.stop()
     return ingest_worker.get_status()
+
+
+@app.post(
+    "/print/prepare", dependencies=[Depends(require_api_key)]
+)
+async def print_prepare_endpoint(
+    file: UploadFile = File(...),
+    name: Optional[str] = Form(default=None),
+    barcode_link_info: Optional[str] = Form(default=None),
+) -> Response:
+    """Add barcode + registration marks to a pre-imposed print PDF and
+    register the matching cut job. Returns the marked print PDF."""
+    raw_pdf = await file.read()
+    if not raw_pdf:
+        raise HTTPException(status_code=400, detail="Uploaded PDF is empty.")
+    if len(raw_pdf) > settings.max_upload_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Uploaded PDF is {len(raw_pdf)} bytes; maximum allowed is "
+                f"{settings.max_upload_bytes}."
+            ),
+        )
+    barcode = (
+        _validate_barcode_link_info(barcode_link_info)
+        if barcode_link_info else None
+    )
+    job_name = name or (file.filename or "print-job").rsplit(".", 1)[0]
+    try:
+        result = await asyncio.to_thread(
+            prepare_print,
+            raw_pdf,
+            settings=settings,
+            store=store,
+            name=job_name,
+            barcode_link_info=barcode,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    headers = {
+        "X-Job-Id": str(result.job_id),
+        "X-Barcode": result.barcode_link_info,
+        "X-Cut-Source": result.cut_source,
+        "X-Cut-Segments": str(result.segment_count),
+        "Content-Disposition": (
+            f'attachment; filename="{result.name}_'
+            f'{result.barcode_link_info}.pdf"'
+        ),
+    }
+    if result.warnings:
+        headers["X-Warnings"] = " | ".join(result.warnings)
+    return Response(
+        content=result.pdf_bytes,
+        media_type="application/pdf",
+        headers=headers,
+    )
+
+
+@app.get("/print/status", dependencies=[Depends(require_api_key)])
+def print_status() -> dict[str, object]:
+    return print_worker.get_status()
+
+
+@app.post("/print/start", dependencies=[Depends(require_api_key)])
+def print_start() -> dict[str, object]:
+    print_worker.start()
+    return print_worker.get_status()
+
+
+@app.post("/print/stop", dependencies=[Depends(require_api_key)])
+def print_stop() -> dict[str, object]:
+    print_worker.stop()
+    return print_worker.get_status()
 
 
 @app.get("/dls/status", dependencies=[Depends(require_api_key)])

@@ -83,6 +83,13 @@ class Settings:
     max_upload_bytes: int
     gpgl_steps_per_mm: int
 
+    cut_spot_colors: tuple[str, ...]
+    barcode_prefix: str
+    print_ingest_enabled: bool
+    print_inbox_dir: Path
+    print_outbox_dir: Path
+    print_error_dir: Path
+
     @classmethod
     def from_env(cls) -> "Settings":
         app_data_dir = Path(os.getenv("APP_DATA_DIR", "./data")).resolve()
@@ -106,9 +113,21 @@ class Settings:
             os.getenv("INGEST_ERROR_DIR", str(app_data_dir / "errors"))
         ).resolve()
 
-        ingest_inbox_dir.mkdir(parents=True, exist_ok=True)
-        ingest_processed_dir.mkdir(parents=True, exist_ok=True)
-        ingest_error_dir.mkdir(parents=True, exist_ok=True)
+        print_inbox_dir = Path(
+            os.getenv("PRINT_INBOX_DIR", str(app_data_dir / "inbox" / "print"))
+        ).resolve()
+        print_outbox_dir = Path(
+            os.getenv("PRINT_OUTBOX_DIR", str(app_data_dir / "outbox" / "print"))
+        ).resolve()
+        print_error_dir = Path(
+            os.getenv("PRINT_ERROR_DIR", str(app_data_dir / "errors"))
+        ).resolve()
+
+        for folder in (
+            ingest_inbox_dir, ingest_processed_dir, ingest_error_dir,
+            print_inbox_dir, print_outbox_dir, print_error_dir,
+        ):
+            folder.mkdir(parents=True, exist_ok=True)
 
         return cls(
             app_data_dir=app_data_dir,
@@ -162,4 +181,18 @@ class Settings:
             # Steps per mm of the cutter's GP-GL STEP SIZE setting
             # (10 = 0.1 mm factory default; also 20, 40, or 100).
             gpgl_steps_per_mm=int(os.getenv("GPGL_STEPS_PER_MM", "10")),
+            # Spot color names accepted as legacy cut-line markers
+            # (ISO 19593-1 processing steps are always accepted).
+            cut_spot_colors=tuple(
+                n.strip() for n in
+                os.getenv("CUT_SPOT_COLORS", "CutContour").split(",")
+                if n.strip()
+            ),
+            # First char(s) of server-minted barcodes; must not start
+            # with 'G' (reserved by Graphtec).
+            barcode_prefix=os.getenv("BARCODE_PREFIX", "F").strip().upper(),
+            print_ingest_enabled=_bool_from_env("PRINT_INGEST_ENABLED", True),
+            print_inbox_dir=print_inbox_dir,
+            print_outbox_dir=print_outbox_dir,
+            print_error_dir=print_error_dir,
         )

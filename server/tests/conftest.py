@@ -62,6 +62,8 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
     # Ergonomic single-cutter overrides; pass cutters=... directly for more.
     cutter_host = overrides.pop("cutter_host", "127.0.0.1")
     cutter_port = overrides.pop("cutter_port", 9)
+    (data_dir / "inbox" / "print").mkdir(parents=True, exist_ok=True)
+    (data_dir / "outbox" / "print").mkdir(parents=True, exist_ok=True)
     values = dict(
         app_data_dir=data_dir,
         database_path=data_dir / "jobs.db",
@@ -84,6 +86,12 @@ def make_settings(tmp_path: Path, **overrides) -> Settings:
         api_key="",
         max_upload_bytes=20 * 1024 * 1024,
         gpgl_steps_per_mm=10,
+        cut_spot_colors=("CutContour",),
+        barcode_prefix="F",
+        print_ingest_enabled=False,
+        print_inbox_dir=data_dir / "inbox" / "print",
+        print_outbox_dir=data_dir / "outbox" / "print",
+        print_error_dir=errors,
     )
     values.update(overrides)
     return Settings(**values)

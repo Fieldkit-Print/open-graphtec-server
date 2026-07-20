@@ -108,6 +108,8 @@ All endpoints except `/` and `/health` require an `X-API-Key` header when
 | DELETE | `/jobs/{id}` | Delete a job |
 | GET | `/cutter/info` | Live cutter identity/settings query |
 | GET | `/version` | Service name, version, server time |
+| POST | `/print/prepare` | Add barcode + marks to a print PDF, register the cut job |
+| GET/POST | `/print/status` · `/print/start` · `/print/stop` | Print-prepare hot-folder worker |
 | POST | `/jobs/import-pdf` | Upload a PDF for conversion |
 | POST | `/jobs/import-json` | Import a raw GP-GL job |
 
@@ -127,6 +129,24 @@ Set in `.env` (see `.env.example` for the full list):
 
 On startup the server reads the cutter's model and step size and warns
 loudly if the configured scale does not match the machine.
+
+## Print preparation
+
+Send a pre-imposed print PDF whose cut paths are on an **ISO 19593-1
+processing-steps layer** (`Structural`/`Cutting`) — or, as a legacy
+fallback, in a spot color named `CutContour` — and the server returns the
+same PDF with the Graphtec barcode and registration marks overlaid
+(original content untouched), while registering the matching cut job under
+a server-minted barcode. One computation produces both artifacts, so the
+printed marks and the stored job geometry cannot drift.
+
+- `POST /print/prepare` — marked PDF back in the response
+  (`X-Barcode`, `X-Job-Id` headers)
+- hot folder — drop into `inbox/print/`, collect
+  `<name>_<barcode>.pdf` from `outbox/print/`
+
+Artwork must keep clear of the barcode band at the leading edge and the
+mark corners; violations are rejected with a precise reason.
 
 ## Test sheets
 

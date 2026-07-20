@@ -30,8 +30,10 @@ def api(tmp_path_factory):
 @pytest.fixture()
 def client(api):
     client, main = api
-    # Reset to open mode between tests.
-    main.settings = dataclasses.replace(main.settings, api_key="")
+    # Reset settings that individual tests mutate.
+    main.settings = dataclasses.replace(
+        main.settings, api_key="", max_upload_bytes=20 * 1024 * 1024
+    )
     return client
 
 
@@ -197,6 +199,31 @@ def test_cutter_info_reports_unreachable_cutter(client) -> None:
     response = client.get("/cutter/info")
     assert response.status_code == 503
     assert "did not respond" in response.json()["detail"]
+
+
+def test_print_prepare_endpoint(client) -> None:
+    from tests.test_print_prepare import artwork_pdf, spot_pdf
+
+    response = client.post(
+        "/print/prepare",
+        files={"file": ("labels.pdf", spot_pdf(), "application/pdf")},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["x-barcode"].startswith("F")
+    assert int(response.headers["x-cut-segments"]) == 4
+    assert response.content.startswith(b"%PDF")
+
+    job = client.get(f"/jobs/{response.headers['x-job-id']}").json()
+    assert job["barcode_link_info"] == response.headers["x-barcode"]
+    assert job["regmark_fx"] == 60 and job["regmark_fy"] == 400
+
+    no_cut = client.post(
+        "/print/prepare",
+        files={"file": ("plain.pdf", artwork_pdf(), "application/pdf")},
+    )
+    assert no_cut.status_code == 400
+    assert "No cut paths" in no_cut.json()["detail"]
 
 
 def test_ingest_endpoints_exist(client) -> None:
