@@ -10,6 +10,7 @@ scans its barcode.
 | Doc | Read it when you want to… |
 |---|---|
 | [Getting started](getting-started.md) | install the server and cut your first barcode job |
+| [Deploying with Coolify](deployment-coolify.md) | run it permanently on a Coolify-managed host |
 | [Configuration](configuration.md) | look up any environment variable |
 | [HTTP API](api.md) | integrate from a RIP, MIS, or script |
 | [Print preparation](print-preparation.md) | add barcodes + marks to print files |
